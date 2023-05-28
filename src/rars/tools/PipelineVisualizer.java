@@ -57,6 +57,7 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
     // TODO: backstep
     // TODO: user statistics (telemetry)
     // TODO: speedup calculator
+    // TODO: line numbers instead of addresses
 
     // FETCH, DECODE, OPERAND FETCH, EXECUTE, WRITE BACK
     private static final int STAGES = 5; // TODO: utilize this generally?
@@ -171,7 +172,9 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         ProgramStatement ret = null;
         int failsafe = STAGES * 2;
         while (!stmt.equals(ret) && failsafe > 0) {
+            // TODO: weird bug where branch as stmt will only show in table after next instruction
             ret = advancePipeline(stmt);
+            updateTable();
             failsafe--;
         }
 
@@ -204,6 +207,7 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
 
             if (first != null) {
                 try {
+                    // TODO: walk over non-instructions
                     nextInMem = Memory.getInstance().getStatementNoNotify(first.getAddress() + 4);
                 } catch (AddressErrorException e) {
                     // TODO Auto-generated catch block
@@ -248,9 +252,6 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
             currentPipeline[STAGE.ID] = currentPipeline[STAGE.IF];
             currentPipeline[STAGE.IF] = nextInMem;
         }
-
-        // update table
-        updateTable();
 
         return commit;
     }
