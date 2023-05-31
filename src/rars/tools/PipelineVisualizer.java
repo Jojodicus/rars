@@ -29,6 +29,7 @@ package rars.tools;
 // TODO: optimize imports
 
 import javax.swing.*;
+import javax.swing.table.DefaultTableCellRenderer;
 import javax.swing.table.DefaultTableModel;
 import javax.swing.table.TableModel;
 
@@ -41,6 +42,9 @@ import rars.riscv.hardware.MemoryAccessNotice;
 import rars.riscv.instructions.Branch;
 
 import java.awt.*;
+import java.awt.event.ComponentAdapter;
+import java.awt.event.ComponentEvent;
+import java.util.*;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -82,6 +86,9 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
     // private ArrayList<ProgramStatement> currentPipeline = new ArrayList<>(STAGES); // TODO: remove/replace
     private ProgramStatement[] currentPipeline = new ProgramStatement[STAGES];
 
+    // row and column mappings for cell coloring
+    private ArrayList<Map<Integer, Color>> colors = new ArrayList<>(STAGES);
+
     public PipelineVisualizer(String title, String heading) {
         super(title, heading);
     }
@@ -97,6 +104,10 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
 
     @Override
     protected JComponent buildMainDisplayArea() {
+        for (int i = 0; i < STAGES; i++) {
+            colors.add(new HashMap<>());
+        }
+
         JPanel panel = new JPanel(new BorderLayout());
 
         model = new DefaultTableModel();
@@ -106,7 +117,7 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         model.addColumn("EX");
         model.addColumn("WB");
 
-        // i have no idea what half of these options do
+        // i have no idea what half of these options do TODO: find out
         pipeline = new JTable(model);
         pipeline.setShowGrid(true);
         pipeline.setGridColor(Color.BLACK);
@@ -114,6 +125,23 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         pipeline.setRowSelectionAllowed(false);
         pipeline.setCellSelectionEnabled(true);
         pipeline.setFillsViewportHeight(true);
+
+        // custom renderer for coloring cells
+        pipeline.setDefaultRenderer(Object.class, new DefaultTableCellRenderer() {
+            @Override
+            public Component getTableCellRendererComponent(JTable table, Object value, boolean isSelected, boolean hasFocus, int row, int column) {
+                Component c = super.getTableCellRendererComponent(table, value, isSelected, hasFocus, row, column);
+
+                if (colors.get(column).containsKey(row)) {
+                    c.setBackground(colors.get(column).get(row));
+                } else {
+                    c.setBackground(Color.WHITE);
+                }
+
+                return c;
+            }
+        });
+
 
         JScrollPane scrollPane = new JScrollPane(pipeline);
         panel.add(scrollPane, BorderLayout.CENTER);
@@ -124,8 +152,12 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
     protected void reset() {
         model.setRowCount(0);
         lastAddress = -1;
-        // currentPipeline.clear();
-        // currentPipeline.ensureCapacity(STAGES);
+        for (int i = 0; i < STAGES; i++) {
+            currentPipeline[i] = null;
+        }
+        for (var map : colors) {
+            map.clear();
+        }
     }
 
     @Override
@@ -159,7 +191,7 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
             // silently ignore
         }
 
-        // very last instruction
+        // very first/last instruction
         if (stmt == null) return;
 
         // System.out.println(Arrays.toString(stmt.getOperands()));
@@ -170,11 +202,24 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         // model.addRow(new Object[] {instructionName, "", "", "", ""});
 
         ProgramStatement ret = null;
-        int failsafe = STAGES * 2;
-        while (!stmt.equals(ret) && failsafe > 0) {
-            // TODO: weird bug where branch as stmt will only show in table after next instruction
+        int failsafe = STAGES * 3;
+        while (failsafe > 0) {
             ret = advancePipeline(stmt);
             updateTable();
+
+            // System.out.println("got " + statementToString(ret) + " from " + statementToString(stmt));
+
+            if (stmt.equals(ret)) {
+                break;
+            }
+
+            if (ret != null) {
+                System.err.println("unexpected return value: " + statementToString(stmt));
+                System.err.println("expected return value: " + statementToString(ret));
+                System.err.println("pipeline: [" + statementToString(currentPipeline[0]) + ", " + statementToString(currentPipeline[1]) + ", " + statementToString(currentPipeline[2]) + ", " + statementToString(currentPipeline[3]) + ", " + statementToString(currentPipeline[4]) + "]");
+                break;
+            }
+
             failsafe--;
         }
 
@@ -185,65 +230,54 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
     }
 
     private ProgramStatement advancePipeline(ProgramStatement next) {
-        // TODO: control hazards
+        // TODO: control hazards, maybe use PC?
 
         // pipeline is empty
-        // if (currentPipeline.stream().allMatch(x -> x == null)) {
         if (Arrays.stream(currentPipeline).allMatch(x -> x == null)) {
-            // currentPipeline.set(STAGE.IF, next);
             currentPipeline[STAGE.IF] = next;
             return null;
         }
 
         // try to advance pipeline
 
-        // ProgramStatement first = currentPipeline.stream().filter(x -> x != null).findFirst().orElse(null);
+        // control hazard resolved // TODO: optimize check
+        ProgramStatement wb = currentPipeline[STAGE.WB];
+        if (wb != null && wb.getInstruction() instanceof Branch) {
+            // update last prediction TODO: add coloring for uncertianty
+            model.setValueAt(statementToString(next), model.getRowCount()-1, STAGE.IF);
+            currentPipeline[STAGE.IF] = next;
+
+            // nextInMem = next;
+        }
 
         // next fetched instruction
         ProgramStatement nextInMem = null;
         if (!hasControlHazard()) {
-            // ProgramStatement first = currentPipeline.get(STAGE.IF);
             ProgramStatement first = currentPipeline[STAGE.IF];
 
             if (first != null) {
                 try {
-                    // TODO: walk over non-instructions
-                    nextInMem = Memory.getInstance().getStatementNoNotify(first.getAddress() + 4);
+                    // TODO: walk over non-instructions?
+                    nextInMem = Memory.getInstance().getStatementNoNotify(first.getAddress() + Instruction.INSTRUCTION_LENGTH);
                 } catch (AddressErrorException e) {
                     // TODO Auto-generated catch block
                     e.printStackTrace();
                 }
             } else {
-                nextInMem = next;
+                // end of program reached
+                nextInMem = null;
             }
         } else {
-            // TODO: during control hazard, instruction is stalled in IF. only gets replaced after branch leaves EX
-
             // flush pipeline
-            // currentPipeline.set(STAGE.IF, null);
+            nextInMem = currentPipeline[STAGE.IF];
             currentPipeline[STAGE.IF] = null;
-            // currentPipeline.set(STAGE.ID, null);
         }
 
-
-        // commit last instruction
-        // ProgramStatement commit = currentPipeline.get(STAGE.WB);
-        ProgramStatement commit = currentPipeline[STAGE.WB];
-
         // advance pipeline
-        // currentPipeline.set(STAGE.WB, currentPipeline.get(STAGE.EX));
         currentPipeline[STAGE.WB] = currentPipeline[STAGE.EX];
-        // currentPipeline.set(STAGE.EX, currentPipeline.get(STAGE.OF));
         currentPipeline[STAGE.EX] = currentPipeline[STAGE.OF];
 
         // data hazards
-        // if (hasDataHazard(currentPipeline.get(STAGE.ID))) {
-        //     currentPipeline.set(STAGE.OF, null);
-        // } else {
-        //     currentPipeline.set(STAGE.OF, currentPipeline.get(STAGE.ID));
-        //     currentPipeline.set(STAGE.ID, currentPipeline.get(STAGE.IF));
-        //     currentPipeline.set(STAGE.IF, nextInMem);
-        // }
         if (hasDataHazard(currentPipeline[STAGE.ID])) {
             // TODO: is this right?
             currentPipeline[STAGE.OF] = null;
@@ -253,7 +287,7 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
             currentPipeline[STAGE.IF] = nextInMem;
         }
 
-        return commit;
+        return currentPipeline[STAGE.WB];
     }
 
     private boolean hasDataHazard(ProgramStatement reading) {
@@ -270,9 +304,6 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
     private boolean hasControlHazard() {
         // branch instruction at ID, OF or EX
 
-        // ProgramStatement id = currentPipeline.get(STAGE.ID);
-        // ProgramStatement of = currentPipeline.get(STAGE.OF);
-        // ProgramStatement ex = currentPipeline.get(STAGE.EX);
         ProgramStatement id = currentPipeline[STAGE.ID];
         ProgramStatement of = currentPipeline[STAGE.OF];
         ProgramStatement ex = currentPipeline[STAGE.EX];
@@ -284,9 +315,24 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         return false;
     }
 
+    // TODO: merge with top one
+    private int hasControlHazardInt() {
+        // branch instruction at ID, OF or EX
+
+        ProgramStatement id = currentPipeline[STAGE.ID];
+        ProgramStatement of = currentPipeline[STAGE.OF];
+        ProgramStatement ex = currentPipeline[STAGE.EX];
+
+        if (id != null && id.getInstruction() instanceof Branch) return STAGE.ID;
+        if (of != null && of.getInstruction() instanceof Branch) return STAGE.OF;
+        if (ex != null && ex.getInstruction() instanceof Branch) return STAGE.EX;
+
+        return -1;
+    }
+
     private String statementToString(ProgramStatement stmt) {
         if (stmt == null) return "";
-        return stmt.getInstruction().getName() + " " + stmt.getAddress();
+        return stmt.getInstruction().getName() + " " + stmt.getSourceLine();
     }
 
     private void updateTable() {
@@ -294,16 +340,26 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
 
         // write pipeline to table
         model.addRow(new Object[] {
-            // statementToString(currentPipeline.get(STAGE.IF)),
-            // statementToString(currentPipeline.get(STAGE.ID)),
-            // statementToString(currentPipeline.get(STAGE.OF)),
-            // statementToString(currentPipeline.get(STAGE.EX)),
-            // statementToString(currentPipeline.get(STAGE.WB))
             statementToString(currentPipeline[STAGE.IF]),
             statementToString(currentPipeline[STAGE.ID]),
             statementToString(currentPipeline[STAGE.OF]),
             statementToString(currentPipeline[STAGE.EX]),
             statementToString(currentPipeline[STAGE.WB])
         });
+
+        // add color
+        int row = model.getRowCount()-1;
+        int col = hasControlHazardInt();
+        if (col != -1) {
+            colors.get(col).put(row, Color.YELLOW);
+        }
+
+        // scroll to bottom
+        pipeline.addComponentListener(new ComponentAdapter() {
+        public void componentResized(ComponentEvent e) {
+            int lastIndex =pipeline.getCellRect(pipeline.getRowCount()-1, 0, false).y;
+            pipeline.changeSelection(lastIndex, 0,false,false);
+        }
+    });
     }
 }
