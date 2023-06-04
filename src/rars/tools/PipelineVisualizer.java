@@ -39,7 +39,9 @@ import rars.riscv.hardware.AccessNotice;
 import rars.riscv.hardware.AddressErrorException;
 import rars.riscv.hardware.Memory;
 import rars.riscv.hardware.MemoryAccessNotice;
+import rars.riscv.hardware.RegisterFile;
 import rars.riscv.instructions.Branch;
+import rars.simulator.Simulator;
 
 import java.awt.*;
 import java.awt.event.ComponentAdapter;
@@ -62,6 +64,7 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
     // TODO: user statistics (telemetry)
     // TODO: speedup calculator
     // TODO: line numbers instead of addresses
+    // TODO: Jumps are also Branches
 
     // FETCH, DECODE, OPERAND FETCH, EXECUTE, WRITE BACK
     private static final int STAGES = 5; // TODO: utilize this generally?
@@ -143,6 +146,13 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
             }
         });
 
+        // scroll to bottom
+        pipeline.addComponentListener(new ComponentAdapter() {
+            public void componentResized(ComponentEvent e) {
+                int lastIndex =pipeline.getCellRect(pipeline.getRowCount()-1, 0, false).y;
+                pipeline.changeSelection(lastIndex, 0,false,false);
+            }
+        });
 
         JScrollPane scrollPane = new JScrollPane(pipeline);
         panel.add(scrollPane, BorderLayout.CENTER);
@@ -276,6 +286,23 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         } else {
             // flush pipeline
             nextInMem = currentPipeline[STAGE.IF];
+
+            // try to predict without using PC (because that's broken) TODO: clean this mess up
+            if (currentPipeline[STAGE.EX] != null && currentPipeline[STAGE.EX].getInstruction() instanceof Branch) {
+                Branch b = (Branch) currentPipeline[STAGE.EX].getInstruction();
+                if (b.willBranch(currentPipeline[STAGE.EX])) {
+                    // branch taken
+                    System.out.println(Arrays.toString(currentPipeline[STAGE.EX].getOperands()));
+                    int taken = currentPipeline[STAGE.EX].getOperands()[2]; // TODO: is this generic?
+                    try {
+                        nextInMem = Memory.getInstance().getStatementNoNotify(currentPipeline[STAGE.EX].getAddress() + taken);
+                    } catch (AddressErrorException e) {
+                        // TODO Auto-generated catch block
+                        e.printStackTrace();
+                    }
+                }
+            }
+
             currentPipeline[STAGE.IF] = null;
         }
 
@@ -366,13 +393,5 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         if (currentPipeline[STAGE.WB] != null && currentPipeline[STAGE.WB].getInstruction() instanceof Branch) {
             colors.get(STAGE.IF).put(row, Color.LIGHT_GRAY);
         }
-
-        // scroll to bottom
-        pipeline.addComponentListener(new ComponentAdapter() {
-        public void componentResized(ComponentEvent e) {
-            int lastIndex =pipeline.getCellRect(pipeline.getRowCount()-1, 0, false).y;
-            pipeline.changeSelection(lastIndex, 0,false,false);
-        }
-    });
     }
 }
