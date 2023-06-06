@@ -33,7 +33,9 @@ import javax.swing.table.DefaultTableCellRenderer;
 import javax.swing.table.DefaultTableModel;
 import javax.swing.table.TableModel;
 
+import rars.Globals;
 import rars.ProgramStatement;
+import rars.RISCVprogram;
 import rars.riscv.Instruction;
 import rars.riscv.hardware.AccessNotice;
 import rars.riscv.hardware.AddressErrorException;
@@ -41,7 +43,11 @@ import rars.riscv.hardware.Memory;
 import rars.riscv.hardware.MemoryAccessNotice;
 import rars.riscv.hardware.RegisterFile;
 import rars.riscv.instructions.Branch;
+import rars.riscv.instructions.JAL;
+import rars.riscv.instructions.JALR;
+import rars.simulator.BackStepper;
 import rars.simulator.Simulator;
+import rars.simulator.SimulatorNotice;
 
 import java.awt.*;
 import java.awt.event.ComponentAdapter;
@@ -62,9 +68,7 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
     // TODO: other pipeline types
     // TODO: backstep
     // TODO: user statistics (telemetry)
-    // TODO: speedup calculator
     // TODO: line numbers instead of addresses
-    // TODO: Jumps are also Branches
 
     // FETCH, DECODE, OPERAND FETCH, EXECUTE, WRITE BACK
     private static final int STAGES = 5; // TODO: utilize this generally?
@@ -85,13 +89,21 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
     private JPanel panel;
     private JTable pipeline;
     private DefaultTableModel model;
+    private JLabel speedup;
+    private JButton stepback;
     private int lastAddress = -1; // TODO: is this really needed?
+
+    protected int executedInstructions = 0;
+    protected int cyclesTaken = 0;
 
     // private ArrayList<ProgramStatement> currentPipeline = new ArrayList<>(STAGES); // TODO: remove/replace
     private ProgramStatement[] currentPipeline = new ProgramStatement[STAGES];
 
     // row and column mappings for cell coloring
     private ArrayList<Map<Integer, Color>> colors = new ArrayList<>(STAGES);
+
+    // stack for backstepping TODO: update pipeline
+    private Stack<Integer> backstepStack = new Stack<>();
 
     public PipelineVisualizer(String title, String heading) {
         super(title, heading);
@@ -156,6 +168,26 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
 
         JScrollPane scrollPane = new JScrollPane(pipeline);
         panel.add(scrollPane, BorderLayout.CENTER);
+
+        JPanel bottomPanel = new JPanel(new BorderLayout());
+
+        // TODO: make this fancy?
+        speedup = new JLabel("Speedup: 0.0");
+        bottomPanel.add(speedup, BorderLayout.WEST);
+
+        stepback = new JButton("Step Back");
+        stepback.addActionListener(e -> {
+            // TODO: make this update venusGUI as well
+            BackStepper backStepper = Globals.program.getBackStepper();
+            if (backStepper != null && backStepper.enabled() && !backStepper.empty()) {
+                backStepper.backStep();
+                model.setRowCount(model.getRowCount() - backstepStack.pop());
+            }
+        });
+
+        bottomPanel.add(stepback, BorderLayout.EAST);
+        panel.add(bottomPanel, BorderLayout.SOUTH);
+
         return panel;
     }
 
@@ -174,7 +206,21 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
     @Override
     protected void addAsObserver() {
         addAsObserver(Memory.textBaseAddress, Memory.textLimitAddress);
+        // Simulator.getInstance().addObserver(this);
     }
+
+    // @Override
+    // public void update(Observable resource, Object accessNotice) {
+    //     if (accessNotice instanceof AccessNotice) {
+    //         super.update(resource, accessNotice);
+    //     } else if (accessNotice instanceof SimulatorNotice) {
+    //         processSimulatorUpdate(resource, (SimulatorNotice) accessNotice);
+    //     }
+    // }
+
+    // protected void processSimulatorUpdate(Observable resource, SimulatorNotice notice) {
+    //     System.out.println(notice.toString());
+    // }
 
     @Override
     protected void processRISCVUpdate(Observable resource, AccessNotice notice) {
@@ -213,10 +259,12 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         // model.addRow(new Object[] {instructionName, "", "", "", ""});
 
         ProgramStatement ret = null;
+        int taken = 0;
         int failsafe = STAGES * 3;
-        while (failsafe > 0) {
+        while (taken < failsafe) {
             ret = advancePipeline(stmt);
             updateTable();
+            cyclesTaken++;
 
             // System.out.println("got " + statementToString(ret) + " from " + statementToString(stmt));
 
@@ -225,23 +273,32 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
             }
 
             if (ret != null) {
-                failsafe = 0;
+                taken = failsafe;
                 System.err.println("unexpected return value: " + statementToString(stmt));
                 System.err.println("expected return value: " + statementToString(ret));
                 System.err.println("pipeline: [" + statementToString(currentPipeline[0]) + ", " + statementToString(currentPipeline[1]) + ", " + statementToString(currentPipeline[2]) + ", " + statementToString(currentPipeline[3]) + ", " + statementToString(currentPipeline[4]) + "]");
                 break;
             }
 
-            failsafe--;
+            taken++;
         }
 
-        if (failsafe == 0) {
+        executedInstructions++;
+
+        if (taken == failsafe) {
             JOptionPane.showMessageDialog(panel, "VAPOR: could not predict pipeline", "VAPOR", JOptionPane.ERROR_MESSAGE);
             reset();
             connectButton.doClick();
             // TODO: telemetry
             System.err.println("VAPOR: could not predict pipeline");
         }
+
+        // update speedup
+        // assume 1 cycle per stage with pipeline, 5 cycles per stage without (i e all stalls)
+        speedup.setText(String.format("Speedup: %.2f", (double) STAGES * executedInstructions / cyclesTaken));
+
+        // provide info for backstep
+        backstepStack.push(taken);
     }
 
     private ProgramStatement advancePipeline(ProgramStatement next) {
@@ -257,7 +314,7 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
 
         // control hazard resolved // TODO: optimize check
         ProgramStatement wb = currentPipeline[STAGE.WB];
-        if (wb != null && wb.getInstruction() instanceof Branch) {
+        if (isBranchInstruction(wb)) {
             // update last prediction
             model.setValueAt(statementToString(next), model.getRowCount()-1, STAGE.IF);
             colors.get(STAGE.IF).remove(model.getRowCount()-1);
@@ -288,18 +345,10 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
             nextInMem = currentPipeline[STAGE.IF];
 
             // try to predict without using PC (because that's broken) TODO: clean this mess up
-            if (currentPipeline[STAGE.EX] != null && currentPipeline[STAGE.EX].getInstruction() instanceof Branch) {
-                Branch b = (Branch) currentPipeline[STAGE.EX].getInstruction();
-                if (b.willBranch(currentPipeline[STAGE.EX])) {
-                    // branch taken
-                    System.out.println(Arrays.toString(currentPipeline[STAGE.EX].getOperands()));
-                    int taken = currentPipeline[STAGE.EX].getOperands()[2]; // TODO: is this generic?
-                    try {
-                        nextInMem = Memory.getInstance().getStatementNoNotify(currentPipeline[STAGE.EX].getAddress() + taken);
-                    } catch (AddressErrorException e) {
-                        // TODO Auto-generated catch block
-                        e.printStackTrace();
-                    }
+            if (isBranchInstruction(currentPipeline[STAGE.EX])) {
+                ProgramStatement prediction = predictBranch(currentPipeline[STAGE.EX]);
+                if (prediction != null) {
+                    nextInMem = prediction;
                 }
             }
 
@@ -323,6 +372,63 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         return currentPipeline[STAGE.WB];
     }
 
+    private static boolean isBranchInstruction(ProgramStatement stmt) {
+        if (stmt == null) {
+            return false;
+        }
+
+        return stmt.getInstruction() instanceof Branch || stmt.getInstruction() instanceof JAL || stmt.getInstruction() instanceof JALR;
+    }
+
+    private static ProgramStatement predictBranch(ProgramStatement stmt) {
+        if (stmt == null) {
+            return null;
+        }
+
+        // TODO: clean up
+
+        if (stmt.getInstruction() instanceof Branch) {
+            Branch b = (Branch) stmt.getInstruction();
+            if (b.willBranch(stmt)) {
+                // branch taken
+                // System.out.println(Arrays.toString(stmt.getOperands()));
+                int offset = stmt.getOperands()[2]; // TODO: is this generic?
+                try {
+                    return Memory.getInstance().getStatementNoNotify(stmt.getAddress() + offset);
+                } catch (AddressErrorException e) {
+                    // TODO Auto-generated catch block
+                    e.printStackTrace();
+                }
+            }
+        }
+
+        if (stmt.getInstruction() instanceof JAL) {
+            JAL b = (JAL) stmt.getInstruction();
+            int offset = stmt.getOperands()[2];
+            // System.out.println(Arrays.toString(stmt.getOperands()));
+            // System.out.printf("JAL %x\n", offset);
+            try {
+                return Memory.getInstance().getStatementNoNotify(stmt.getAddress() + offset);
+            } catch (AddressErrorException e) {
+                // TODO Auto-generated catch block
+                e.printStackTrace();
+            }
+        }
+
+        if (stmt.getInstruction() instanceof JALR) {
+            JALR b = (JALR) stmt.getInstruction();
+            int newaddr = RegisterFile.getValue(stmt.getOperand(1)) + stmt.getOperand(2);
+            try {
+                return Memory.getInstance().getStatementNoNotify(newaddr);
+            } catch (AddressErrorException e) {
+                // TODO Auto-generated catch block
+                e.printStackTrace();
+            }
+        }
+
+        return null;
+    }
+
     private boolean hasDataHazard(ProgramStatement reading) {
         // hazard in EX or WB
 
@@ -341,9 +447,9 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         ProgramStatement of = currentPipeline[STAGE.OF];
         ProgramStatement ex = currentPipeline[STAGE.EX];
 
-        if (id != null && id.getInstruction() instanceof Branch) return true;
-        if (of != null && of.getInstruction() instanceof Branch) return true;
-        if (ex != null && ex.getInstruction() instanceof Branch) return true;
+        if (isBranchInstruction(id)) return true;
+        if (isBranchInstruction(of)) return true;
+        if (isBranchInstruction(ex)) return true;
 
         return false;
     }
@@ -356,9 +462,9 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         ProgramStatement of = currentPipeline[STAGE.OF];
         ProgramStatement ex = currentPipeline[STAGE.EX];
 
-        if (id != null && id.getInstruction() instanceof Branch) return STAGE.ID;
-        if (of != null && of.getInstruction() instanceof Branch) return STAGE.OF;
-        if (ex != null && ex.getInstruction() instanceof Branch) return STAGE.EX;
+        if (isBranchInstruction(id)) return STAGE.ID;
+        if (isBranchInstruction(of)) return STAGE.OF;
+        if (isBranchInstruction(ex)) return STAGE.EX;
 
         return -1;
     }
@@ -390,7 +496,7 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         }
 
         // still uncertain fetch (from control hazard - limitation of simulation)
-        if (currentPipeline[STAGE.WB] != null && currentPipeline[STAGE.WB].getInstruction() instanceof Branch) {
+        if (isBranchInstruction(currentPipeline[STAGE.WB])) {
             colors.get(STAGE.IF).put(row, Color.LIGHT_GRAY);
         }
     }
