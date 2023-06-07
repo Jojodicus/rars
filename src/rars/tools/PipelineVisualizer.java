@@ -66,9 +66,11 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
     // TODO: help button
     // TODO: standalone application
     // TODO: other pipeline types
-    // TODO: backstep
-    // TODO: user statistics (telemetry)
+    // TODO: backstep, maybe?
+    // TODO: user statistics (telemetry) - each time pipeline init
     // TODO: line numbers instead of addresses
+    // TODO: max speedup
+    // TODO: load word, store word prediction wrong? selfmod.s
 
     // FETCH, DECODE, OPERAND FETCH, EXECUTE, WRITE BACK
     private static final int STAGES = 5; // TODO: utilize this generally?
