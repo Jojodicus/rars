@@ -53,22 +53,16 @@ import java.awt.*;
 import java.awt.event.ComponentAdapter;
 import java.awt.event.ComponentEvent;
 import java.util.*;
-import java.util.ArrayDeque;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Deque;
-import java.util.LinkedList;
-import java.util.Observable;
 
 // TODO: javadoc
 
 public class PipelineVisualizer extends AbstractToolAndApplication {
+    // TODO: REFACTOR!!!
+
     // TODO: help button
     // TODO: standalone application
     // TODO: other pipeline types
-    // TODO: backstep, maybe?
     // TODO: user statistics (telemetry) - each time pipeline init
-    // TODO: max speedup
     // TODO: load word, store word prediction wrong? selfmod.s
 
     // FETCH, DECODE, OPERAND FETCH, EXECUTE, WRITE BACK
@@ -91,11 +85,10 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
     private JTable pipeline;
     private DefaultTableModel model;
     private JLabel speedup;
-    private JButton stepback;
-    private int lastAddress = -1; // TODO: is this really needed?
+    // private int lastAddress = -1; // TODO: is this really needed?
 
-    protected int executedInstructions = 0;
-    protected int cyclesTaken = 0;
+    // protected int executedInstructions = 0;
+    // protected int cyclesTaken = 0;
 
     // private ArrayList<ProgramStatement> currentPipeline = new ArrayList<>(STAGES); // TODO: remove/replace
     private ProgramStatement[] currentPipeline = new ProgramStatement[STAGES];
@@ -195,15 +188,23 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
     }
 
     @Override
+    protected JComponent getHelpComponent() {
+        return new JLabel("TODO: help");
+    }
+
+    @Override
     protected void reset() {
         model.setRowCount(0);
-        lastAddress = -1;
+        // lastAddress = -1;
         for (int i = 0; i < STAGES; i++) {
             currentPipeline[i] = null;
         }
         for (var map : colors) {
             map.clear();
         }
+        backstepStack.clear();
+        backstepPipelineStack.clear();
+        updateSpeedupText();
     }
 
     @Override
@@ -273,7 +274,7 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         while (taken < failsafe) {
             ret = advancePipeline(stmt);
             updateTable();
-            cyclesTaken++;
+            // cyclesTaken++;
 
             // System.out.println("got " + statementToString(ret) + " from " + statementToString(stmt));
 
@@ -292,7 +293,7 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
             taken++;
         }
 
-        executedInstructions++;
+        // executedInstructions++;
 
         if (taken == failsafe) {
             JOptionPane.showMessageDialog(panel, "VAPOR: could not predict pipeline", "VAPOR", JOptionPane.ERROR_MESSAGE);
@@ -316,6 +317,7 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
 
         // pipeline is empty
         if (Arrays.stream(currentPipeline).allMatch(x -> x == null)) {
+            // TODO: send telemetry
             // we have to add our observer here as to make a seemless experience for the user
             // yes, this is a hack
             Globals.program.getBackStepper().addObserver(this);
@@ -416,7 +418,7 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         }
 
         if (stmt.getInstruction() instanceof JAL) {
-            JAL b = (JAL) stmt.getInstruction();
+            // JAL b = (JAL) stmt.getInstruction();
             int offset = stmt.getOperands()[1];
             // System.out.println(Arrays.toString(stmt.getOperands()));
             // System.out.printf("JAL %x\n", offset);
@@ -430,7 +432,7 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         }
 
         if (stmt.getInstruction() instanceof JALR) {
-            JALR b = (JALR) stmt.getInstruction();
+            // JALR b = (JALR) stmt.getInstruction();
             int newaddr = RegisterFile.getValue(stmt.getOperand(1)) + stmt.getOperand(2);
             try {
                 return Memory.getInstance().getStatementNoNotify(newaddr);
