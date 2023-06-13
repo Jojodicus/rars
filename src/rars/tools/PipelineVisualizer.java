@@ -67,7 +67,7 @@ import java.util.*;
 public class PipelineVisualizer extends AbstractToolAndApplication {
     // TODO: REFACTOR!!!
 
-    // TODO: data hazards
+    // TODO: ecalls?
     // TODO: help button
     // TODO: standalone application
     // TODO: other pipeline types
@@ -402,7 +402,7 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         currentPipeline[STAGE.WB] = currentPipeline[STAGE.EX];
 
         // data hazards
-        if (hasDataHazard() != -1) {
+        if (hasDataHazard().length != 0) {
             currentPipeline[STAGE.EX] = null;
 
             // if control hazard occured, TODO: optimize this
@@ -477,7 +477,7 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         return null;
     }
 
-    private int hasDataHazard() {
+    private int[] hasDataHazard() {
         ProgramStatement reading = currentPipeline[STAGE.OF];
 
         ProgramStatement writingEX = currentPipeline[STAGE.EX];
@@ -489,16 +489,25 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         int[] writingRegistersEX = getWritingRegisters(writingEX);
         int[] writingRegistersWB = getWritingRegisters(writingWB);
 
+        if (readingRegisters == null || writingRegistersEX == null || writingRegistersWB == null) {
+            System.err.println("could not get affected registers");
+            return new int[] { };
+        }
+
+        Set<Integer> collisions = new HashSet<Integer>();
+
         // check for collisions
         for (int rd : readingRegisters) {
             for (int wrEX : writingRegistersEX) {
                 if (rd == wrEX) {
-                    return STAGE.EX;
+                    collisions.add(STAGE.OF);
+                    collisions.add(STAGE.EX);
                 }
             }
             for (int wrWB : writingRegistersWB) {
                 if (rd == wrWB) {
-                    return STAGE.WB;
+                    collisions.add(STAGE.OF);
+                    collisions.add(STAGE.WB);
                 }
             }
         }
@@ -506,14 +515,16 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         // memory collisions
         if (readingMemory(reading)) {
             if (writingMemory(writingEX)) {
-                return STAGE.EX;
+                    collisions.add(STAGE.OF);
+                    collisions.add(STAGE.EX);
             }
             if (writingMemory(writingWB)) {
-                return STAGE.WB;
+                    collisions.add(STAGE.OF);
+                    collisions.add(STAGE.WB);
             }
         }
 
-        return -1;
+        return collisions.stream().mapToInt(i -> i).toArray();
     }
 
     private boolean hasControlHazard() {
@@ -548,40 +559,47 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
     // TODO: refactor this out
 
     private int[] getReadingRegisters(ProgramStatement stmt) {
+        if (stmt == null) {
+            return new int[] {};
+        }
+
         Instruction inst = stmt.getInstruction();
+        int[] operands = stmt.getOperands();
 
         if (inst instanceof Arithmetic) {
-            
+            return new int[] { operands[1], operands[2] };
         }
         if (inst instanceof Branch) {
-            
+            return new int[] { operands[0], operands[1] };
         }
         if (inst instanceof rars.riscv.instructions.Double) {
-            
+            return new int[] { operands[1], operands[2] };
         }
         if (inst instanceof Floating) {
-            
+            return new int[] { operands[1], operands[2] };
         }
         if (inst instanceof FusedDouble) {
-            
+            return new int[] { operands[1], operands[2], operands[3] };
         }
         if (inst instanceof FusedFloat) {
-            
+            return new int[] { operands[1], operands[2], operands[3] };
         }
         if (inst instanceof ImmediateInstruction) {
-            
+            return new int[] { operands[1] };
         }
         if (inst instanceof Load) {
-            
+            // TODO
+            return new int[] { operands[1] };
         }
         if (inst instanceof Store) {
-            
+            // TODO
+            return new int[] { operands[0], operands[1] };
         }
         if (inst instanceof JAL) {
-            
+            return new int[] { };
         }
         if (inst instanceof JALR) {
-            
+            return new int[] { operands[1] };
         }
 
         System.err.println("Unknown instruction type: " + inst.getName());
@@ -589,40 +607,45 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
     }
 
     private int[] getWritingRegisters(ProgramStatement stmt) {
+        if (stmt == null) {
+            return new int[] {};
+        }
+
         Instruction inst = stmt.getInstruction();
+        int[] operands = stmt.getOperands();
 
         if (inst instanceof Arithmetic) {
-            
+            return new int[] { operands[0] };
         }
         if (inst instanceof Branch) {
-            
+            return new int[] { };
         }
         if (inst instanceof rars.riscv.instructions.Double) {
-            
+            return new int[] { operands[0] };
         }
         if (inst instanceof Floating) {
-            
+            return new int[] { operands[0] };
         }
         if (inst instanceof FusedDouble) {
-            
+            return new int[] { operands[0] };
         }
         if (inst instanceof FusedFloat) {
-            
+            return new int[] { operands[0] };
         }
         if (inst instanceof ImmediateInstruction) {
-            
+            return new int[] { operands[0] };
         }
         if (inst instanceof Load) {
-            
+            return new int[] { operands[0] };
         }
         if (inst instanceof Store) {
-            
+            return new int[] { };
         }
         if (inst instanceof JAL) {
-            
+            return new int[] { operands[0] };
         }
         if (inst instanceof JALR) {
-            
+            return new int[] { operands[0] };
         }
 
         System.err.println("Unknown instruction type: " + inst.getName());
@@ -630,24 +653,30 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
     }
 
     private boolean readingMemory(ProgramStatement stmt) {
+        if (stmt == null) {
+            return false;
+        }
+
         Instruction inst = stmt.getInstruction();
 
         if (inst instanceof Load) {
             return true;
         }
 
-        System.err.println("Unknown instruction type: " + inst.getName());
         return false;
     }
 
     private boolean writingMemory(ProgramStatement stmt) {
+        if (stmt == null) {
+            return false;
+        }
+
         Instruction inst = stmt.getInstruction();
 
         if (inst instanceof Store) {
             return true;
         }
 
-        System.err.println("Unknown instruction type: " + inst.getName());
         return false;
     }
 
@@ -700,6 +729,17 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
             colors.get(col).put(row, Color.YELLOW);
         }
 
+        // data hazard
+        int[] dataHazard = hasDataHazard();
+        for (int stage : dataHazard) {
+            // already has control hazard
+            if (colors.get(stage).containsKey(row)) {
+                colors.get(stage).put(row, Color.ORANGE);
+            } else {
+                colors.get(stage).put(row, Color.RED);
+            }
+        }
+
         // still uncertain fetch (from control hazard - limitation of simulation)
         if (isBranchInstruction(currentPipeline[STAGE.WB])) {
             colors.get(STAGE.IF).put(row, Color.LIGHT_GRAY);
@@ -721,7 +761,7 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         sb.append(String.format("%.2f", (double) STAGES * instructionsExecuted / totalCyclesTaken));
         sb.append("<br/>");
 
-        sb.append("Maximum achievable speedup: ");
+        sb.append("Maximum theoretical speedup: ");
         sb.append(String.format("%.2f", (double) STAGES * instructionsExecuted / (STAGES + instructionsExecuted - 1)));
 
         sb.append("</html>");
