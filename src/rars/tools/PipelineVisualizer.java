@@ -59,6 +59,7 @@ import java.util.*;
 public class PipelineVisualizer extends AbstractToolAndApplication {
     // TODO: REFACTOR!!!
 
+    // TODO: data hazards
     // TODO: help button
     // TODO: standalone application
     // TODO: other pipeline types
@@ -189,7 +190,25 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
 
     @Override
     protected JComponent getHelpComponent() {
-        return new JLabel("TODO: help");
+        final String helpContent = // TODO: make this look better
+            "This tool visualizes the pipeline of the RISC-V processor.\n" +
+            "- currently supports 5 stages\n" +
+            "- supports backstep\n" +
+            "- supports speedup calculation\n" +
+            "- supports branch simulation\n" +
+            "- colors cells according to the following scheme:\n" +
+            "  - white: no special attributes\n" +
+            "  - gray: simulated instruction, can change with further execution\n" +
+            "  - yellow: control hazard\n" +
+            "  - red: data hazard\n" +
+            "- known bugs:\n" +
+            "  - backstepping does not work with branches\n" +
+            "  - self-modifying code breaks simulation\n";
+        JButton help = new JButton("Help");
+        help.addActionListener(e -> {
+            JOptionPane.showMessageDialog(theWindow, helpContent);
+        });
+        return help;
     }
 
     @Override
