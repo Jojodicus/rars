@@ -34,7 +34,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
 /**
- * Base class for all integer instructions using immediates
+ * Base class for all integer instructions using registers
  *
  * @author Benjamin Landers
  * @version June 2017

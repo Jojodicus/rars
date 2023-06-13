@@ -36,15 +36,23 @@ import javax.swing.table.TableModel;
 import rars.Globals;
 import rars.ProgramStatement;
 import rars.RISCVprogram;
+import rars.riscv.BasicInstruction;
 import rars.riscv.Instruction;
 import rars.riscv.hardware.AccessNotice;
 import rars.riscv.hardware.AddressErrorException;
 import rars.riscv.hardware.Memory;
 import rars.riscv.hardware.MemoryAccessNotice;
 import rars.riscv.hardware.RegisterFile;
+import rars.riscv.instructions.Arithmetic;
 import rars.riscv.instructions.Branch;
+import rars.riscv.instructions.Floating;
+import rars.riscv.instructions.FusedDouble;
+import rars.riscv.instructions.FusedFloat;
+import rars.riscv.instructions.ImmediateInstruction;
 import rars.riscv.instructions.JAL;
 import rars.riscv.instructions.JALR;
+import rars.riscv.instructions.Load;
+import rars.riscv.instructions.Store;
 import rars.simulator.BackStepper;
 import rars.simulator.Simulator;
 import rars.simulator.SimulatorNotice;
@@ -201,6 +209,7 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
             "  - gray: simulated instruction, can change with further execution\n" +
             "  - yellow: control hazard\n" +
             "  - red: data hazard\n" +
+            "  - orange: both control and data hazard\n" +
             "- known bugs:\n" +
             "  - backstepping does not work with branches\n" +
             "  - self-modifying code breaks simulation\n";
@@ -391,13 +400,17 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
 
         // advance pipeline
         currentPipeline[STAGE.WB] = currentPipeline[STAGE.EX];
-        currentPipeline[STAGE.EX] = currentPipeline[STAGE.OF];
 
         // data hazards
-        if (hasDataHazard(currentPipeline[STAGE.ID])) {
-            // TODO: is this right?
-            currentPipeline[STAGE.OF] = null;
+        if (hasDataHazard() != -1) {
+            currentPipeline[STAGE.EX] = null;
+
+            // if control hazard occured, TODO: optimize this
+            if (currentPipeline[STAGE.IF] == null) {
+                currentPipeline[STAGE.IF] = nextInMem;
+            }
         } else {
+            currentPipeline[STAGE.EX] = currentPipeline[STAGE.OF];
             currentPipeline[STAGE.OF] = currentPipeline[STAGE.ID];
             currentPipeline[STAGE.ID] = currentPipeline[STAGE.IF];
             currentPipeline[STAGE.IF] = nextInMem;
@@ -464,15 +477,43 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         return null;
     }
 
-    private boolean hasDataHazard(ProgramStatement reading) {
+    private int hasDataHazard() {
+        ProgramStatement reading = currentPipeline[STAGE.OF];
+
+        ProgramStatement writingEX = currentPipeline[STAGE.EX];
+        ProgramStatement writingWB = currentPipeline[STAGE.WB];
+
         // hazard in EX or WB
 
-        // reading.getInstruction()
+        int[] readingRegisters = getReadingRegisters(reading);
+        int[] writingRegistersEX = getWritingRegisters(writingEX);
+        int[] writingRegistersWB = getWritingRegisters(writingWB);
 
-        // int[] ops = reading.getOperands();
-        // int[] ops2 = writing.getOperands();
+        // check for collisions
+        for (int rd : readingRegisters) {
+            for (int wrEX : writingRegistersEX) {
+                if (rd == wrEX) {
+                    return STAGE.EX;
+                }
+            }
+            for (int wrWB : writingRegistersWB) {
+                if (rd == wrWB) {
+                    return STAGE.WB;
+                }
+            }
+        }
 
-        return false;
+        // memory collisions
+        if (readingMemory(reading)) {
+            if (writingMemory(writingEX)) {
+                return STAGE.EX;
+            }
+            if (writingMemory(writingWB)) {
+                return STAGE.WB;
+            }
+        }
+
+        return -1;
     }
 
     private boolean hasControlHazard() {
@@ -502,6 +543,112 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         if (isBranchInstruction(ex)) return STAGE.EX;
 
         return -1;
+    }
+
+    // TODO: refactor this out
+
+    private int[] getReadingRegisters(ProgramStatement stmt) {
+        Instruction inst = stmt.getInstruction();
+
+        if (inst instanceof Arithmetic) {
+            
+        }
+        if (inst instanceof Branch) {
+            
+        }
+        if (inst instanceof rars.riscv.instructions.Double) {
+            
+        }
+        if (inst instanceof Floating) {
+            
+        }
+        if (inst instanceof FusedDouble) {
+            
+        }
+        if (inst instanceof FusedFloat) {
+            
+        }
+        if (inst instanceof ImmediateInstruction) {
+            
+        }
+        if (inst instanceof Load) {
+            
+        }
+        if (inst instanceof Store) {
+            
+        }
+        if (inst instanceof JAL) {
+            
+        }
+        if (inst instanceof JALR) {
+            
+        }
+
+        System.err.println("Unknown instruction type: " + inst.getName());
+        return null;
+    }
+
+    private int[] getWritingRegisters(ProgramStatement stmt) {
+        Instruction inst = stmt.getInstruction();
+
+        if (inst instanceof Arithmetic) {
+            
+        }
+        if (inst instanceof Branch) {
+            
+        }
+        if (inst instanceof rars.riscv.instructions.Double) {
+            
+        }
+        if (inst instanceof Floating) {
+            
+        }
+        if (inst instanceof FusedDouble) {
+            
+        }
+        if (inst instanceof FusedFloat) {
+            
+        }
+        if (inst instanceof ImmediateInstruction) {
+            
+        }
+        if (inst instanceof Load) {
+            
+        }
+        if (inst instanceof Store) {
+            
+        }
+        if (inst instanceof JAL) {
+            
+        }
+        if (inst instanceof JALR) {
+            
+        }
+
+        System.err.println("Unknown instruction type: " + inst.getName());
+        return null;
+    }
+
+    private boolean readingMemory(ProgramStatement stmt) {
+        Instruction inst = stmt.getInstruction();
+
+        if (inst instanceof Load) {
+            return true;
+        }
+
+        System.err.println("Unknown instruction type: " + inst.getName());
+        return false;
+    }
+
+    private boolean writingMemory(ProgramStatement stmt) {
+        Instruction inst = stmt.getInstruction();
+
+        if (inst instanceof Store) {
+            return true;
+        }
+
+        System.err.println("Unknown instruction type: " + inst.getName());
+        return false;
     }
 
     private void processBackStep() {
