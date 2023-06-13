@@ -60,7 +60,7 @@ secretString: .string "solu\n"
 
 _start:
 # First generate secret code and store it in SecretCode buffer
-        call generateCode
+        jal ra, generateCode
         
 #read user number and check for correctness
 user:
