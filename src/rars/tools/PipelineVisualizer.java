@@ -68,7 +68,6 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
     // TODO: other pipeline types
     // TODO: backstep, maybe?
     // TODO: user statistics (telemetry) - each time pipeline init
-    // TODO: line numbers instead of addresses
     // TODO: max speedup
     // TODO: load word, store word prediction wrong? selfmod.s
 
@@ -104,8 +103,9 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
     // row and column mappings for cell coloring
     private ArrayList<Map<Integer, Color>> colors = new ArrayList<>(STAGES);
 
-    // stack for backstepping TODO: update pipeline
+    // stack for backstepping
     private Stack<Integer> backstepStack = new Stack<>();
+    private Stack<ProgramStatement[]> backstepPipelineStack = new Stack<>();
 
     public PipelineVisualizer(String title, String heading) {
         super(title, heading);
@@ -174,20 +174,21 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         JPanel bottomPanel = new JPanel(new BorderLayout());
 
         // TODO: make this fancy?
-        speedup = new JLabel("Speedup: 0.0");
+        speedup = new JLabel();
+        updateSpeedupText();
         bottomPanel.add(speedup, BorderLayout.WEST);
 
-        stepback = new JButton("Step Back");
-        stepback.addActionListener(e -> {
-            // TODO: make this update venusGUI as well
-            BackStepper backStepper = Globals.program.getBackStepper();
-            if (backStepper != null && backStepper.enabled() && !backStepper.empty()) {
-                backStepper.backStep();
-                model.setRowCount(model.getRowCount() - backstepStack.pop());
-            }
-        });
+        // stepback = new JButton("Step Back");
+        // stepback.addActionListener(e -> {
+        //     // TODO: make this update venusGUI as well
+        //     BackStepper backStepper = Globals.program.getBackStepper();
+        //     if (backStepper != null && backStepper.enabled() && !backStepper.empty()) {
+        //         backStepper.backStep();
+        //         model.setRowCount(model.getRowCount() - backstepStack.pop());
+        //     }
+        // });
 
-        bottomPanel.add(stepback, BorderLayout.EAST);
+        // bottomPanel.add(stepback, BorderLayout.EAST);
         panel.add(bottomPanel, BorderLayout.SOUTH);
 
         return panel;
@@ -211,14 +212,18 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         // Simulator.getInstance().addObserver(this);
     }
 
-    // @Override
-    // public void update(Observable resource, Object accessNotice) {
-    //     if (accessNotice instanceof AccessNotice) {
-    //         super.update(resource, accessNotice);
-    //     } else if (accessNotice instanceof SimulatorNotice) {
-    //         processSimulatorUpdate(resource, (SimulatorNotice) accessNotice);
-    //     }
-    // }
+    @Override
+    public void update(Observable resource, Object accessNotice) {
+        if (accessNotice instanceof AccessNotice) {
+            super.update(resource, accessNotice);
+        }
+        // else if (accessNotice instanceof SimulatorNotice) {
+        //     processSimulatorUpdate(resource, (SimulatorNotice) accessNotice);
+        // }
+        else if (accessNotice instanceof BackStepper) {
+            processBackStep();
+        }
+    }
 
     // protected void processSimulatorUpdate(Observable resource, SimulatorNotice notice) {
     //     System.out.println(notice.toString());
@@ -238,10 +243,11 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         MemoryAccessNotice memNotice = (MemoryAccessNotice) notice;
 
         // stolen from Felipe Lessa's instruction counter
-        int a = memNotice.getAddress();
-        if (a == lastAddress)
-            return;
-        lastAddress = a;
+        // TODO: even needed? seems like no
+        // int a = memNotice.getAddress();
+        // if (a == lastAddress)
+        //     return;
+        // lastAddress = a;
 
         ProgramStatement stmt = null;
         try {
@@ -261,7 +267,8 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         // model.addRow(new Object[] {instructionName, "", "", "", ""});
 
         ProgramStatement ret = null;
-        int taken = 0;
+        int taken = 1;
+        backstepPipelineStack.push(currentPipeline.clone());
         int failsafe = STAGES * 3;
         while (taken < failsafe) {
             ret = advancePipeline(stmt);
@@ -295,12 +302,13 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
             System.err.println("VAPOR: could not predict pipeline");
         }
 
-        // update speedup
-        // assume 1 cycle per stage with pipeline, 5 cycles per stage without (i e all stalls)
-        speedup.setText(String.format("Speedup: %.2f", (double) STAGES * executedInstructions / cyclesTaken));
-
         // provide info for backstep
         backstepStack.push(taken);
+
+        // update speedup
+        // assume 1 cycle per stage with pipeline, 5 cycles per stage without (i e all stalls)
+        // speedup.setText(String.format("Speedup: %.2f %.2f", (double) STAGES * executedInstructions / cyclesTaken));
+        updateSpeedupText();
     }
 
     private ProgramStatement advancePipeline(ProgramStatement next) {
@@ -308,6 +316,9 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
 
         // pipeline is empty
         if (Arrays.stream(currentPipeline).allMatch(x -> x == null)) {
+            // we have to add our observer here as to make a seemless experience for the user
+            // yes, this is a hack
+            Globals.program.getBackStepper().addObserver(this);
             currentPipeline[STAGE.IF] = next;
             return null;
         }
@@ -406,9 +417,10 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
 
         if (stmt.getInstruction() instanceof JAL) {
             JAL b = (JAL) stmt.getInstruction();
-            int offset = stmt.getOperands()[2];
+            int offset = stmt.getOperands()[1];
             // System.out.println(Arrays.toString(stmt.getOperands()));
             // System.out.printf("JAL %x\n", offset);
+            // System.out.println(stmt.getAddress());
             try {
                 return Memory.getInstance().getStatementNoNotify(stmt.getAddress() + offset);
             } catch (AddressErrorException e) {
@@ -471,6 +483,29 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         return -1;
     }
 
+    private void processBackStep() {
+        if (backstepStack.empty()) {
+            return;
+        }
+
+        int count = backstepStack.pop();
+
+        // delete rows
+        for (int i = 0; i < count; i++) {
+            model.removeRow(model.getRowCount()-1);
+        }
+
+        // remove colors
+        for (int i = 0; i < count; i++) {
+            colors.forEach((map) -> {
+                map.remove(map.size()-1);
+            });
+        }
+
+        currentPipeline = backstepPipelineStack.pop();
+        updateSpeedupText();
+    }
+
     private String statementToString(ProgramStatement stmt) {
         if (stmt == null) return "";
         return stmt.getInstruction().getName() + " " + stmt.getSourceLine();
@@ -501,5 +536,28 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         if (isBranchInstruction(currentPipeline[STAGE.WB])) {
             colors.get(STAGE.IF).put(row, Color.LIGHT_GRAY);
         }
+    }
+
+    private void updateSpeedupText() {
+        int instructionsExecuted = backstepStack.size();
+        int totalCyclesTaken = backstepStack.stream().mapToInt(x -> x).sum();
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("<html>");
+
+        sb.append("CPI: ");
+        sb.append(String.format("%.2f", (double) totalCyclesTaken / instructionsExecuted));
+        sb.append("<br/>");
+
+        sb.append("Speedup: ");
+        sb.append(String.format("%.2f", (double) STAGES * instructionsExecuted / totalCyclesTaken));
+        sb.append("<br/>");
+
+        sb.append("Maximum achievable speedup: ");
+        sb.append(String.format("%.2f", (double) STAGES * instructionsExecuted / (STAGES + instructionsExecuted - 1)));
+
+        sb.append("</html>");
+
+        speedup.setText(sb.toString());
     }
 }

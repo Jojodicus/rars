@@ -7,6 +7,8 @@ import rars.riscv.hardware.FloatingPointRegisterFile;
 import rars.riscv.hardware.RegisterFile;
 import rars.riscv.Instruction;
 
+import java.util.Observable;
+
 /*
 Copyright (c) 2003-2006,  Pete Sanderson and Kenneth Vollmar
 
@@ -42,7 +44,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  * @version February 2006
  */
 
-public class BackStepper {
+public class BackStepper extends Observable {
     private enum Action {
         MEMORY_RESTORE_RAW_WORD,
         MEMORY_RESTORE_DOUBLE_WORD,
@@ -177,6 +179,9 @@ public class BackStepper {
             } while (!backSteps.empty() && statement == backSteps.peek().ps);
             engaged = true;  // RESET IT (was disabled at top of loop -- see comment)
         }
+        setChanged();
+        notifyObservers(this);
+        clearChanged();
     }
   
      
