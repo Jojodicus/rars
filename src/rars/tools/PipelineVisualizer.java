@@ -748,7 +748,7 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
 
     private void updateSpeedupText() {
         int instructionsExecuted = backstepStack.size();
-        int totalCyclesTaken = backstepStack.stream().mapToInt(x -> x).sum();
+        int totalCyclesTaken = backstepStack.stream().mapToInt(x -> x).sum(); // TODO: extra variable?
 
         StringBuilder sb = new StringBuilder();
         sb.append("<html>");
