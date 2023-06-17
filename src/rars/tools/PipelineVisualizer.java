@@ -199,18 +199,18 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         final String helpContent = // TODO: make this look better
             "This tool visualizes the pipeline of the RISC-V processor.\n" +
             "- currently supports the basic 5 stage pipeline\n" +
+            "- the mnemonics in the pipeline are the assembled non-pseudo instructions\n" +
+            "- numbers correspond to the line numbers in the source code\n" +
             "- supports backstep\n" +
             "- supports speedup calculation\n" +
             "- supports branch simulation\n" +
-            "- colors cells according to the following scheme:\n" +
-            "  - white: no special attributes\n" +
-            "  - gray: simulated instruction, can change with further execution\n" +
-            "  - yellow: control hazard\n" +
-            "  - red: data hazard\n" +
-            "  - orange: both control and data hazard\n" +
+            "- colors and labels cells according to the following scheme:\n" +
+            "  - yellow + " + CONTROL_HAZARD_LABEL + ": control hazard\n" +
+            "  - cyan + " + DATA_HAZARD_LABEL + ": data hazard\n" +
+            "  - green + both labels: both control and data hazard\n" +
             "- known bugs:\n" +
-            "  - backstepping does not work with branches\n" +
-            "  - self-modifying code breaks simulation\n";
+            "  - backstepping does not work over branches\n" +
+            "  - self-modifying code breaks pipeline simulation\n";
         JButton help = new JButton("Help");
         help.addActionListener(e -> {
             JOptionPane.showMessageDialog(theWindow, helpContent);
