@@ -43,14 +43,17 @@ import rars.riscv.hardware.AddressErrorException;
 import rars.riscv.hardware.Memory;
 import rars.riscv.hardware.MemoryAccessNotice;
 import rars.riscv.hardware.RegisterFile;
+import rars.riscv.instructions.AUIPC;
 import rars.riscv.instructions.Arithmetic;
 import rars.riscv.instructions.Branch;
+import rars.riscv.instructions.ECALL;
 import rars.riscv.instructions.Floating;
 import rars.riscv.instructions.FusedDouble;
 import rars.riscv.instructions.FusedFloat;
 import rars.riscv.instructions.ImmediateInstruction;
 import rars.riscv.instructions.JAL;
 import rars.riscv.instructions.JALR;
+import rars.riscv.instructions.LUI;
 import rars.riscv.instructions.Load;
 import rars.riscv.instructions.Store;
 import rars.simulator.BackStepper;
@@ -60,6 +63,7 @@ import rars.simulator.SimulatorNotice;
 import java.awt.*;
 import java.awt.event.ComponentAdapter;
 import java.awt.event.ComponentEvent;
+import java.time.Instant;
 import java.util.*;
 
 // TODO: javadoc
@@ -67,12 +71,10 @@ import java.util.*;
 public class PipelineVisualizer extends AbstractToolAndApplication {
     // TODO: REFACTOR!!!
 
-    // TODO: ecalls?
     // TODO: help button
     // TODO: standalone application
     // TODO: other pipeline types
     // TODO: user statistics (telemetry) - each time pipeline init
-    // TODO: load word, store word prediction wrong? selfmod.s
 
     // FETCH, DECODE, OPERAND FETCH, EXECUTE, WRITE BACK
     private static final int STAGES = 5; // TODO: utilize this generally?
@@ -80,11 +82,19 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
     // readable enum
     private static class STAGE {
         public static final int IF = 0;
-        public static final int ID = 1;
-        public static final int OF = 2;
-        public static final int EX = 3;
+        public static final int IDOF = 1;
+        public static final int EX = 2;
+        public static final int MEM = 3;
         public static final int WB = 4;
     }
+
+    private static final int CONTROL_HAZARD_DETECT = STAGE.IDOF;
+    private static final int DATA_HAZARD_DETECT = STAGE.IDOF;
+    private static final int CONTROL_HAZARD_RESOLVE = STAGE.EX;
+    private static final int DATA_HAZARD_RESOLVE = STAGE.WB;
+
+    private static final String CONTROL_HAZARD_LABEL = " \u2BAB"; // arrow
+    private static final String DATA_HAZARD_LABEL = " \u26A0\uFE0F"; // warning sign
 
     private static final String NAME = "VAPOR";
     private static final String VERSION = "1.0 (Johannes Dittrich)";
@@ -94,16 +104,14 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
     private JTable pipeline;
     private DefaultTableModel model;
     private JLabel speedup;
-    // private int lastAddress = -1; // TODO: is this really needed?
 
     // protected int executedInstructions = 0;
     // protected int cyclesTaken = 0;
 
-    // private ArrayList<ProgramStatement> currentPipeline = new ArrayList<>(STAGES); // TODO: remove/replace
     private ProgramStatement[] currentPipeline = new ProgramStatement[STAGES];
 
     // row and column mappings for cell coloring
-    private ArrayList<Map<Integer, Color>> colors = new ArrayList<>(STAGES);
+    private ArrayList<Map<Integer, Color>> colors = new ArrayList<>(STAGES+1);
 
     // stack for backstepping
     private Stack<Integer> backstepStack = new Stack<>();
@@ -124,20 +132,21 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
 
     @Override
     protected JComponent buildMainDisplayArea() {
-        for (int i = 0; i < STAGES; i++) {
+        for (int i = 0; i < STAGES+1; i++) {
             colors.add(new HashMap<>());
         }
 
         panel = new JPanel(new BorderLayout());
 
         model = new DefaultTableModel();
+        model.addColumn("CYCLE");
         model.addColumn("IF");
-        model.addColumn("ID");
-        model.addColumn("OF");
+        model.addColumn("ID/OF");
         model.addColumn("EX");
+        model.addColumn("MEM");
         model.addColumn("WB");
 
-        // i have no idea what half of these options do TODO: find out
+        // i have no idea what half of these options do
         pipeline = new JTable(model);
         pipeline.setShowGrid(true);
         pipeline.setGridColor(Color.BLACK);
@@ -145,6 +154,7 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         pipeline.setRowSelectionAllowed(false);
         pipeline.setCellSelectionEnabled(true);
         pipeline.setFillsViewportHeight(true);
+        pipeline.setDefaultEditor(Object.class, null);
 
         // custom renderer for coloring cells
         pipeline.setDefaultRenderer(Object.class, new DefaultTableCellRenderer() {
@@ -179,18 +189,6 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         speedup = new JLabel();
         updateSpeedupText();
         bottomPanel.add(speedup, BorderLayout.WEST);
-
-        // stepback = new JButton("Step Back");
-        // stepback.addActionListener(e -> {
-        //     // TODO: make this update venusGUI as well
-        //     BackStepper backStepper = Globals.program.getBackStepper();
-        //     if (backStepper != null && backStepper.enabled() && !backStepper.empty()) {
-        //         backStepper.backStep();
-        //         model.setRowCount(model.getRowCount() - backstepStack.pop());
-        //     }
-        // });
-
-        // bottomPanel.add(stepback, BorderLayout.EAST);
         panel.add(bottomPanel, BorderLayout.SOUTH);
 
         return panel;
@@ -200,7 +198,7 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
     protected JComponent getHelpComponent() {
         final String helpContent = // TODO: make this look better
             "This tool visualizes the pipeline of the RISC-V processor.\n" +
-            "- currently supports 5 stages\n" +
+            "- currently supports the basic 5 stage pipeline\n" +
             "- supports backstep\n" +
             "- supports speedup calculation\n" +
             "- supports branch simulation\n" +
@@ -288,13 +286,7 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         // very first/last instruction
         if (stmt == null) return;
 
-        // System.out.println(Arrays.toString(stmt.getOperands()));
-
-        // String instructionName = stmt.getInstruction().getName();
-
-        // insert into table
-        // model.addRow(new Object[] {instructionName, "", "", "", ""});
-
+        // start filling pipeline
         ProgramStatement ret = null;
         int taken = 1;
         backstepPipelineStack.push(currentPipeline.clone());
@@ -304,12 +296,12 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
             updateTable();
             // cyclesTaken++;
 
-            // System.out.println("got " + statementToString(ret) + " from " + statementToString(stmt));
-
+            // check if we're done
             if (stmt.equals(ret)) {
                 break;
             }
 
+            // simulated wrong execution
             if (ret != null) {
                 taken = failsafe;
                 System.err.println("unexpected return value: " + statementToString(stmt));
@@ -335,12 +327,10 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         backstepStack.push(taken);
 
         // update speedup
-        // assume 1 cycle per stage with pipeline, 5 cycles per stage without (i e all stalls)
-        // speedup.setText(String.format("Speedup: %.2f %.2f", (double) STAGES * executedInstructions / cyclesTaken));
         updateSpeedupText();
     }
 
-    private ProgramStatement advancePipeline(ProgramStatement next) {
+    private ProgramStatement advancePipeline(ProgramStatement executing) {
         // TODO: control hazards, maybe use PC?
 
         // pipeline is empty
@@ -349,72 +339,53 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
             // we have to add our observer here as to make a seemless experience for the user
             // yes, this is a hack
             Globals.program.getBackStepper().addObserver(this);
-            currentPipeline[STAGE.IF] = next;
+            currentPipeline[STAGE.IF] = executing;
             return null;
         }
 
         // try to advance pipeline
+        // TODO: change to generic for-loop
 
-        // control hazard resolved // TODO: optimize check
-        ProgramStatement wb = currentPipeline[STAGE.WB];
-        if (isBranchInstruction(wb)) {
-            // update last prediction
-            model.setValueAt(statementToString(next), model.getRowCount()-1, STAGE.IF);
-            colors.get(STAGE.IF).remove(model.getRowCount()-1);
-            currentPipeline[STAGE.IF] = next;
+        ProgramStatement next = nextInstruction();
+        int controlHazard = hasControlHazard();
+        Set<Integer> dataHazard = hasDataHazard();
 
-            // nextInMem = next;
-        }
+        // MEM -> WB
+        currentPipeline[STAGE.WB] = currentPipeline[STAGE.MEM];
 
-        // next fetched instruction
-        ProgramStatement nextInMem = null;
-        if (!hasControlHazard()) {
-            ProgramStatement first = currentPipeline[STAGE.IF];
+        // EX -> MEM
+        currentPipeline[STAGE.MEM] = currentPipeline[STAGE.EX];
 
-            if (first != null) {
-                try {
-                    // TODO: walk over non-instructions?
-                    nextInMem = Memory.getInstance().getStatementNoNotify(first.getAddress() + Instruction.INSTRUCTION_LENGTH);
-                } catch (AddressErrorException e) {
-                    // TODO Auto-generated catch block
-                    e.printStackTrace();
-                }
-            } else {
-                // end of program reached
-                nextInMem = null;
+        // IDOF -> EX
+        // data hazard
+        if (dataHazard.contains(STAGE.IDOF)) { // potentially stall
+            // resolving?
+            dataHazard.remove(STAGE.IDOF);
+            dataHazard.remove(DATA_HAZARD_RESOLVE);
+            if (!dataHazard.isEmpty()) { // stall
+                currentPipeline[STAGE.EX] = null;
+                return currentPipeline[STAGE.WB];
             }
-        } else {
-            // flush pipeline
-            nextInMem = currentPipeline[STAGE.IF];
+        }
+        currentPipeline[STAGE.EX] = currentPipeline[STAGE.IDOF];
 
-            // try to predict without using PC (because that's broken) TODO: clean this mess up
-            if (isBranchInstruction(currentPipeline[STAGE.EX])) {
-                ProgramStatement prediction = predictBranch(currentPipeline[STAGE.EX]);
-                if (prediction != null) {
-                    nextInMem = prediction;
-                }
+        // IF -> IDOF
+        // control hazard
+        if (controlHazard != -1) { // stall
+            currentPipeline[STAGE.IDOF] = null;
+
+            // resolving?
+            if (controlHazard == CONTROL_HAZARD_RESOLVE) {
+                // update next instruction
+                currentPipeline[STAGE.IF] = next;
             }
 
-            currentPipeline[STAGE.IF] = null;
+            return currentPipeline[STAGE.WB];
         }
+        currentPipeline[STAGE.IDOF] = currentPipeline[STAGE.IF];
 
-        // advance pipeline
-        currentPipeline[STAGE.WB] = currentPipeline[STAGE.EX];
-
-        // data hazards
-        if (hasDataHazard().length != 0) {
-            currentPipeline[STAGE.EX] = null;
-
-            // if control hazard occured, TODO: optimize this
-            if (currentPipeline[STAGE.IF] == null) {
-                currentPipeline[STAGE.IF] = nextInMem;
-            }
-        } else {
-            currentPipeline[STAGE.EX] = currentPipeline[STAGE.OF];
-            currentPipeline[STAGE.OF] = currentPipeline[STAGE.ID];
-            currentPipeline[STAGE.ID] = currentPipeline[STAGE.IF];
-            currentPipeline[STAGE.IF] = nextInMem;
-        }
+        // next IF
+        currentPipeline[STAGE.IF] = next;
 
         return currentPipeline[STAGE.WB];
     }
@@ -477,81 +448,79 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         return null;
     }
 
-    private int[] hasDataHazard() {
-        ProgramStatement reading = currentPipeline[STAGE.OF];
+    private ProgramStatement instructionAfter(ProgramStatement current) {
+        ProgramStatement nextInMem = null;
+        try {
+            // TODO: walk over non-instructions?
+            nextInMem = Memory.getInstance().getStatementNoNotify(current.getAddress() + Instruction.INSTRUCTION_LENGTH);
+        } catch (AddressErrorException e) {
+            // TODO Auto-generated catch block
+            e.printStackTrace();
+        }
+        return nextInMem;
+    }
 
-        ProgramStatement writingEX = currentPipeline[STAGE.EX];
-        ProgramStatement writingWB = currentPipeline[STAGE.WB];
+    private ProgramStatement nextInstruction() {
+        // control hazard currently resolving?
+        if (isBranchInstruction(currentPipeline[CONTROL_HAZARD_RESOLVE])) {
+            ProgramStatement branchPrediction = predictBranch(currentPipeline[CONTROL_HAZARD_RESOLVE]);
+            if (branchPrediction != null) {
+                return branchPrediction;
+            }
 
-        // hazard in EX or WB
+            return instructionAfter(currentPipeline[CONTROL_HAZARD_RESOLVE]);
+        }
+
+        // if not, just use next in memory
+
+        ProgramStatement first = currentPipeline[STAGE.IF];
+        if (first == null) { // end of program reached
+            return null;
+        }
+
+        return instructionAfter(first);
+    }
+
+    private Set<Integer> hasDataHazard() {
+        ProgramStatement reading = currentPipeline[DATA_HAZARD_DETECT];
+        if (reading == null) {
+            return new HashSet<>();
+        }
 
         int[] readingRegisters = getReadingRegisters(reading);
-        int[] writingRegistersEX = getWritingRegisters(writingEX);
-        int[] writingRegistersWB = getWritingRegisters(writingWB);
-
-        if (readingRegisters == null || writingRegistersEX == null || writingRegistersWB == null) {
-            System.err.println("could not get affected registers");
-            return new int[] { };
-        }
-
         Set<Integer> collisions = new HashSet<Integer>();
 
-        // check for collisions
-        for (int rd : readingRegisters) {
-            for (int wrEX : writingRegistersEX) {
-                if (rd == wrEX) {
-                    collisions.add(STAGE.OF);
-                    collisions.add(STAGE.EX);
-                }
+        for (int i = DATA_HAZARD_DETECT + 1; i <= DATA_HAZARD_RESOLVE; ++i) {
+            ProgramStatement writing = currentPipeline[i];
+            if (writing == null) {
+                continue;
             }
-            for (int wrWB : writingRegistersWB) {
-                if (rd == wrWB) {
-                    collisions.add(STAGE.OF);
-                    collisions.add(STAGE.WB);
+
+            int[] writingRegisters = getWritingRegisters(writing);
+
+            for (int rd : readingRegisters) {
+                for (int wr : writingRegisters) {
+                    if (rd == wr && rd != 0) { // zero register is not a real register
+                        collisions.add(i);
+                        collisions.add(DATA_HAZARD_DETECT);
+                    }
                 }
             }
         }
 
-        // memory collisions
-        if (readingMemory(reading)) {
-            if (writingMemory(writingEX)) {
-                    collisions.add(STAGE.OF);
-                    collisions.add(STAGE.EX);
-            }
-            if (writingMemory(writingWB)) {
-                    collisions.add(STAGE.OF);
-                    collisions.add(STAGE.WB);
+        // no memory collisions because of pipeline architecture
+
+        return collisions;
+    }
+
+    private int hasControlHazard() {
+        // branch instruction at ID, OF or EX
+
+        for (int i = CONTROL_HAZARD_DETECT; i <= CONTROL_HAZARD_RESOLVE; i++) {
+            if (isBranchInstruction(currentPipeline[i])) {
+                return i;
             }
         }
-
-        return collisions.stream().mapToInt(i -> i).toArray();
-    }
-
-    private boolean hasControlHazard() {
-        // branch instruction at ID, OF or EX
-
-        ProgramStatement id = currentPipeline[STAGE.ID];
-        ProgramStatement of = currentPipeline[STAGE.OF];
-        ProgramStatement ex = currentPipeline[STAGE.EX];
-
-        if (isBranchInstruction(id)) return true;
-        if (isBranchInstruction(of)) return true;
-        if (isBranchInstruction(ex)) return true;
-
-        return false;
-    }
-
-    // TODO: merge with top one
-    private int hasControlHazardInt() {
-        // branch instruction at ID, OF or EX
-
-        ProgramStatement id = currentPipeline[STAGE.ID];
-        ProgramStatement of = currentPipeline[STAGE.OF];
-        ProgramStatement ex = currentPipeline[STAGE.EX];
-
-        if (isBranchInstruction(id)) return STAGE.ID;
-        if (isBranchInstruction(of)) return STAGE.OF;
-        if (isBranchInstruction(ex)) return STAGE.EX;
 
         return -1;
     }
@@ -601,6 +570,17 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         if (inst instanceof JALR) {
             return new int[] { operands[1] };
         }
+        if (inst instanceof AUIPC) {
+            return new int[] { };
+        }
+        if (inst instanceof LUI) {
+            return new int[] { };
+        }
+
+        // TODO: what to do with ecalls?
+        if (inst instanceof ECALL) {
+            return new int[] { };
+        }
 
         System.err.println("Unknown instruction type: " + inst.getName());
         return null;
@@ -647,37 +627,20 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         if (inst instanceof JALR) {
             return new int[] { operands[0] };
         }
+        if (inst instanceof AUIPC) {
+            return new int[] { operands[0] };
+        }
+        if (inst instanceof LUI) {
+            return new int[] { operands[0] };
+        }
+
+        // TODO: what to do with ecalls?
+        if (inst instanceof ECALL) {
+            return new int[] { };
+        }
 
         System.err.println("Unknown instruction type: " + inst.getName());
         return null;
-    }
-
-    private boolean readingMemory(ProgramStatement stmt) {
-        if (stmt == null) {
-            return false;
-        }
-
-        Instruction inst = stmt.getInstruction();
-
-        if (inst instanceof Load) {
-            return true;
-        }
-
-        return false;
-    }
-
-    private boolean writingMemory(ProgramStatement stmt) {
-        if (stmt == null) {
-            return false;
-        }
-
-        Instruction inst = stmt.getInstruction();
-
-        if (inst instanceof Store) {
-            return true;
-        }
-
-        return false;
     }
 
     private void processBackStep() {
@@ -687,15 +650,13 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
 
         int count = backstepStack.pop();
 
-        // delete rows
+        // delete rows and color
         for (int i = 0; i < count; i++) {
-            model.removeRow(model.getRowCount()-1);
-        }
+            int rows = model.getRowCount();
 
-        // remove colors
-        for (int i = 0; i < count; i++) {
+            model.removeRow(rows-1);
             colors.forEach((map) -> {
-                map.remove(map.size()-1);
+                map.remove(rows-1);
             });
         }
 
@@ -709,53 +670,63 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
     }
 
     private void updateTable() {
-        // TODO: coloring for hazards
+        int rows = model.getRowCount();
+        int controlHazard = hasControlHazard();
+        Set<Integer> dataHazards = hasDataHazard();
+
+        Object[] newrow = new Object[STAGES+1];
+        newrow[0] = rows+1;
+        for (int i = 0; i < STAGES; i++) {
+            StringBuilder sb = new StringBuilder();
+            sb.append(statementToString(currentPipeline[i]));
+            if (dataHazards.contains(i)) {
+                sb.append(DATA_HAZARD_LABEL);
+            }
+            if (controlHazard == i) {
+                sb.append(CONTROL_HAZARD_LABEL);
+            }
+            newrow[i+1] = sb.toString();
+        }
 
         // write pipeline to table
-        model.addRow(new Object[] {
-            statementToString(currentPipeline[STAGE.IF]),
-            statementToString(currentPipeline[STAGE.ID]),
-            statementToString(currentPipeline[STAGE.OF]),
-            statementToString(currentPipeline[STAGE.EX]),
-            statementToString(currentPipeline[STAGE.WB])
-        });
+        model.addRow(newrow);
 
         // add color
 
+        // color for cycle column
+        colors.get(0).put(rows, Color.LIGHT_GRAY);
+
         // control hazard
-        int row = model.getRowCount()-1;
-        int col = hasControlHazardInt();
-        if (col != -1) {
-            colors.get(col).put(row, Color.YELLOW);
+        if (controlHazard != -1) {
+            colors.get(controlHazard+1).put(rows, Color.YELLOW);
         }
 
         // data hazard
-        int[] dataHazard = hasDataHazard();
-        for (int stage : dataHazard) {
+        for (int stage : hasDataHazard()) {
+            stage++; // +1 because of cycle column
+
             // already has control hazard
-            if (colors.get(stage).containsKey(row)) {
-                colors.get(stage).put(row, Color.ORANGE);
+            if (colors.get(stage).containsKey(rows)) {
+                colors.get(stage).put(rows, Color.GREEN);
             } else {
-                colors.get(stage).put(row, Color.RED);
+                colors.get(stage).put(rows, Color.CYAN);
             }
         }
 
         // still uncertain fetch (from control hazard - limitation of simulation)
-        if (isBranchInstruction(currentPipeline[STAGE.WB])) {
-            colors.get(STAGE.IF).put(row, Color.LIGHT_GRAY);
-        }
+        // if (isBranchInstruction(currentPipeline[STAGE.WB])) {
+        //     colors.get(STAGE.IF).put(row, Color.LIGHT_GRAY);
+        // }
     }
 
     private void updateSpeedupText() {
+        // assume 1 cycle per stage with pipeline, 5 cycles per stage without (i e all stalls)
+
         int instructionsExecuted = backstepStack.size();
-        int totalCyclesTaken = backstepStack.stream().mapToInt(x -> x).sum(); // TODO: extra variable?
+        int totalCyclesTaken = model.getRowCount();
 
         StringBuilder sb = new StringBuilder();
         sb.append("<html>");
-
-        sb.append("CPI: ");
-        sb.append(String.format("%.2f", (double) totalCyclesTaken / instructionsExecuted));
-        sb.append("<br/>");
 
         sb.append("Speedup: ");
         sb.append(String.format("%.2f", (double) STAGES * instructionsExecuted / totalCyclesTaken));
