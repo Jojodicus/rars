@@ -55,6 +55,9 @@ import rars.riscv.instructions.JAL;
 import rars.riscv.instructions.JALR;
 import rars.riscv.instructions.LUI;
 import rars.riscv.instructions.Load;
+import rars.riscv.instructions.SLLI;
+import rars.riscv.instructions.SRAI;
+import rars.riscv.instructions.SRLI;
 import rars.riscv.instructions.Store;
 import rars.simulator.BackStepper;
 import rars.simulator.Simulator;
@@ -358,14 +361,9 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
 
         // IDOF -> EX
         // data hazard
-        if (dataHazard.contains(STAGE.IDOF)) { // potentially stall
-            // resolving?
-            dataHazard.remove(STAGE.IDOF);
-            dataHazard.remove(DATA_HAZARD_RESOLVE);
-            if (!dataHazard.isEmpty()) { // stall
-                currentPipeline[STAGE.EX] = null;
-                return currentPipeline[STAGE.WB];
-            }
+        if (dataHazard.contains(STAGE.IDOF)) { // stall
+            currentPipeline[STAGE.EX] = null;
+            return currentPipeline[STAGE.WB];
         }
         currentPipeline[STAGE.EX] = currentPipeline[STAGE.IDOF];
 
@@ -576,6 +574,15 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         if (inst instanceof LUI) {
             return new int[] { };
         }
+        if (inst instanceof SRLI) {
+            return new int[] { operands[1] };
+        }
+        if (inst instanceof SRAI) {
+            return new int[] { operands[1] };
+        }
+        if (inst instanceof SLLI) {
+            return new int[] { operands[1] };
+        }
 
         // TODO: what to do with ecalls?
         if (inst instanceof ECALL) {
@@ -633,6 +640,16 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         if (inst instanceof LUI) {
             return new int[] { operands[0] };
         }
+        if (inst instanceof SRLI) {
+            return new int[] { operands[0] };
+        }
+        if (inst instanceof SRAI) {
+            return new int[] { operands[0] };
+        }
+        if (inst instanceof SLLI) {
+            return new int[] { operands[0] };
+        }
+
 
         // TODO: what to do with ecalls?
         if (inst instanceof ECALL) {
