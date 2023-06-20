@@ -555,12 +555,10 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
             return new int[] { operands[1] };
         }
         if (inst instanceof Load) {
-            // TODO
-            return new int[] { operands[1] };
+            return new int[] { operands[2] };
         }
         if (inst instanceof Store) {
-            // TODO
-            return new int[] { operands[0], operands[1] };
+            return new int[] { operands[0], operands[2] };
         }
         if (inst instanceof JAL) {
             return new int[] { };
