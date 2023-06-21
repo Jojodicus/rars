@@ -36,6 +36,7 @@ import javax.swing.table.TableModel;
 import rars.Globals;
 import rars.ProgramStatement;
 import rars.RISCVprogram;
+import rars.assembler.SourceLine;
 import rars.riscv.BasicInstruction;
 import rars.riscv.Instruction;
 import rars.riscv.hardware.AccessNotice;
@@ -112,6 +113,12 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
     // protected int cyclesTaken = 0;
 
     private ProgramStatement[] currentPipeline = new ProgramStatement[STAGES];
+    private RISCVprogram currentProgram = null;
+
+    // which lines should be inserted into the pipeline
+    Set<Integer> measuredLines = new HashSet<>();
+    String MEASURE_START = "PIPELINE_MEASURE_START";
+    String MEASURE_END = "PIPELINE_MEASURE_END";
 
     // row and column mappings for cell coloring
     private ArrayList<Map<Integer, Color>> colors = new ArrayList<>(STAGES+1);
@@ -165,10 +172,24 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
             public Component getTableCellRendererComponent(JTable table, Object value, boolean isSelected, boolean hasFocus, int row, int column) {
                 Component c = super.getTableCellRendererComponent(table, value, isSelected, hasFocus, row, column);
 
-                if (colors.get(column).containsKey(row)) {
-                    c.setBackground(colors.get(column).get(row));
+                Color color = colors.get(column).get(row);
+
+                if (color != null) {
+                    c.setBackground(color);
+
+                    // this has issues with green
+                    // calculate (weighted) luminance
+                    // int luminance = (3*color.getRed() + 4*color.getGreen() + color.getBlue()) >> 3;
+
+                    // if color is dark, make text white
+                    if (Math.max(color.getRed(), Math.max(color.getGreen(), color.getBlue())) < 128) {
+                        c.setForeground(Color.WHITE);
+                    } else {
+                        c.setForeground(Color.BLACK);
+                    }
                 } else {
                     c.setBackground(Color.WHITE);
+                    c.setForeground(Color.BLACK);
                 }
 
                 return c;
@@ -207,6 +228,7 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
             "- supports backstep\n" +
             "- supports speedup calculation\n" +
             "- supports branch simulation\n" +
+            "- supports measuring ranges\n" +
             "- colors and labels cells according to the following scheme:\n" +
             "  - yellow + " + CONTROL_HAZARD_LABEL + ": control hazard\n" +
             "  - cyan + " + DATA_HAZARD_LABEL + ": data hazard\n" +
@@ -233,6 +255,7 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         }
         backstepStack.clear();
         backstepPipelineStack.clear();
+        measuredLines.clear();
         updateSpeedupText();
     }
 
@@ -287,7 +310,65 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         }
 
         // very first/last instruction
-        if (stmt == null) return;
+        if (stmt == null) {
+            return;
+        }
+
+        // check if we're in a new program
+        if (!Globals.program.equals(currentProgram)) {
+            // if so, reset
+            reset();
+        }
+
+        // per-program initialization
+        // yes, this is really hacky
+        if (backstepPipelineStack.empty()) {
+            // TODO: send telemetry
+
+            // set program
+            currentProgram = Globals.program;
+
+            // yes, this probably leaks memory when constantly switching between programs
+            currentProgram.getBackStepper().addObserver(this);
+
+            // parse measuring ranges
+            ArrayList<SourceLine> src = currentProgram.getSourceLineList();
+            boolean inRange = false;
+            for (SourceLine line : src) {
+                String content = line.getSource();
+
+                // check if we're at the start of a measuring range
+                if (content.contains(MEASURE_START)) {
+                    inRange = true;
+                }
+
+                // add line to measuring range
+                if (inRange) {
+                    measuredLines.add(line.getLineNumber());
+                }
+
+                // check if we're at the end of a measuring range
+                if (content.contains(MEASURE_END)) {
+                    inRange = false;
+                    continue;
+                }
+            }
+        }
+
+        // check if we're in a measuring range when we defined one
+        if (!(measuredLines.isEmpty() || measuredLines.contains(stmt.getSourceLine()))) {
+            // skip line and prepare for next line
+
+            // clear pipeline
+            for (int i = 0; i < STAGES; i++) {
+                currentPipeline[i] = null;
+            }
+
+            // add color marker to table
+            colors.get(0).put(model.getRowCount(), Color.DARK_GRAY);
+
+            return;
+        }
 
         // start filling pipeline
         ProgramStatement ret = null;
@@ -334,14 +415,8 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
     }
 
     private ProgramStatement advancePipeline(ProgramStatement executing) {
-        // TODO: control hazards, maybe use PC?
-
         // pipeline is empty
         if (Arrays.stream(currentPipeline).allMatch(x -> x == null)) {
-            // TODO: send telemetry
-            // we have to add our observer here as to make a seemless experience for the user
-            // yes, this is a hack
-            Globals.program.getBackStepper().addObserver(this);
             currentPipeline[STAGE.IF] = executing;
             return null;
         }
@@ -709,7 +784,7 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         // add color
 
         // color for cycle column
-        colors.get(0).put(rows, Color.LIGHT_GRAY);
+        colors.get(0).putIfAbsent(rows, Color.LIGHT_GRAY);
 
         // control hazard
         if (controlHazard != -1) {
@@ -743,11 +818,15 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         StringBuilder sb = new StringBuilder();
         sb.append("<html>");
 
+        sb.append("Instructions executed: ");
+        sb.append(instructionsExecuted);
+        sb.append("<br/>");
+
         sb.append("Speedup: ");
         sb.append(String.format("%.2f", (double) STAGES * instructionsExecuted / totalCyclesTaken));
         sb.append("<br/>");
 
-        sb.append("Maximum theoretical speedup: ");
+        sb.append("Maximum achievable speedup: ");
         sb.append(String.format("%.2f", (double) STAGES * instructionsExecuted / (STAGES + instructionsExecuted - 1)));
 
         sb.append("</html>");
