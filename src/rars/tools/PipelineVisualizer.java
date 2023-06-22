@@ -26,6 +26,10 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 package rars.tools;
 
+import javax.crypto.Cipher;
+import javax.crypto.KeyGenerator;
+import javax.crypto.SecretKey;
+
 // TODO: optimize imports
 
 import javax.swing.*;
@@ -67,13 +71,23 @@ import rars.simulator.SimulatorNotice;
 import java.awt.*;
 import java.awt.event.ComponentAdapter;
 import java.awt.event.ComponentEvent;
+import java.io.IOException;
+import java.io.OutputStream;
+import java.net.Socket;
+import java.security.KeyFactory;
+import java.security.NoSuchAlgorithmException;
+import java.security.PublicKey;
+import java.security.spec.X509EncodedKeySpec;
 import java.time.Instant;
 import java.util.*;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.regex.Pattern;
 
 // TODO: javadoc
 
 public class PipelineVisualizer extends AbstractToolAndApplication {
     // TODO: REFACTOR!!!
+    // TODO: make things static and final where possible
 
     // TODO: help button
     // TODO: standalone application
@@ -116,9 +130,9 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
     private RISCVprogram currentProgram = null;
 
     // which lines should be inserted into the pipeline
-    Set<Integer> measuredLines = new HashSet<>();
-    String MEASURE_START = "PIPELINE_MEASURE_START";
-    String MEASURE_END = "PIPELINE_MEASURE_END";
+    private Set<Integer> measuredLines = new HashSet<>();
+    private static final String MEASURE_START = "PIPELINE_MEASURE_START";
+    private static final String MEASURE_END = "PIPELINE_MEASURE_END";
 
     // row and column mappings for cell coloring
     private ArrayList<Map<Integer, Color>> colors = new ArrayList<>(STAGES+1);
@@ -126,6 +140,21 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
     // stack for backstepping
     private Stack<Integer> backstepStack = new Stack<>();
     private Stack<ProgramStatement[]> backstepPipelineStack = new Stack<>();
+
+    // telemetry
+    private static final String DOMAIN = "gra.dittrich.pro";
+    private static final int PORT = 7181;
+    public static final int IDM_LENGTH = 8;
+    public static final Pattern IDM_PATTERN = Pattern.compile("[a-z]{2}[0-9]{2}[a-z]{4}");
+    private static final String CRASH_IDENTIFIER = "crashing"; // note: has to be IDM_LENGTH characters long
+    private static final String POISON_PILL = "POISON_PILL";
+    LinkedBlockingQueue<String> telemetryQueue = new LinkedBlockingQueue<>();
+    private TelemetrySender telemetrySender;
+
+    // crypto stuff
+    private static final String PUBLIC_KEY = "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAzQ0JkilZyRhMnrnK77r1fUBTV+dmYVPmyQn//dp6a8TfgGRmctpWbG86kVgbpUXr46gjkI50mcfnjoNmMCiSs7jX5nkkroDoMJOMvTcyXooguvN1Hl4+reBrxySBJRpOM/d5vK4hwaw1UPT7i28Ar2vbMMh4f4ci06I8dzI/NrxyF5NpQU9VierfjzkD0iae3XIn1E/9lszy634UmzgTPllZceRcfUUWMf1MTKyHdbxAqEhktuTEVCI0QHG1+2MjpSoezVgYrhlf46XGz5eiyIQVjWlpjyYt5sCZIoINtTPn4O9z3ad4Gkpv2Jfcm+sibNiC1fWBwn+SlaJ5mS8MfwIDAQAB";
+    private static SecretKey secretKey;
+    private static byte[] encryptedKey;
 
     public PipelineVisualizer(String title, String heading) {
         super(title, heading);
@@ -233,6 +262,7 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
             "  - yellow + " + CONTROL_HAZARD_LABEL + ": control hazard\n" +
             "  - cyan + " + DATA_HAZARD_LABEL + ": data hazard\n" +
             "  - green + both labels: both control and data hazard\n" +
+            "- telemetry over encrypted channel\n" +
             "- known bugs:\n" +
             "  - backstepping does not work over branches\n" +
             "  - self-modifying code breaks pipeline simulation\n";
@@ -241,6 +271,35 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
             JOptionPane.showMessageDialog(theWindow, helpContent);
         });
         return help;
+    }
+
+    protected void initializePreGUI() {
+        // initialize crypto stuff
+        try {
+            byte[] publicKeyBytes = Base64.getDecoder().decode(PUBLIC_KEY);
+            KeyFactory keyFactory = KeyFactory.getInstance("RSA");
+            PublicKey publicKey = keyFactory.generatePublic(new X509EncodedKeySpec(publicKeyBytes));
+
+            // generate AES key
+            secretKey = KeyGenerator.getInstance("AES").generateKey();
+
+            // encrypt AES key using RSA
+            Cipher rsaCipher = Cipher.getInstance("RSA/ECB/PKCS1Padding");
+            rsaCipher.init(Cipher.ENCRYPT_MODE, publicKey);
+            encryptedKey = rsaCipher.doFinal(secretKey.getEncoded());
+        } catch (Exception e) {
+            e.printStackTrace();
+            return;
+        }
+
+        // initialize telemetry
+        telemetrySender = new TelemetrySender(telemetryQueue);
+        telemetrySender.start();
+    }
+
+    protected void performSpecialClosingDuties() {
+        // send poison pill to telemetry thread
+        telemetryQueue.add(POISON_PILL);
     }
 
     @Override
@@ -256,6 +315,7 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         backstepStack.clear();
         backstepPipelineStack.clear();
         measuredLines.clear();
+        currentProgram = null;
         updateSpeedupText();
     }
 
@@ -323,10 +383,11 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         // per-program initialization
         // yes, this is really hacky
         if (backstepPipelineStack.empty()) {
-            // TODO: send telemetry
-
             // set program
             currentProgram = Globals.program;
+
+            // send telemetry
+            sendTelemetry(false);
 
             // yes, this probably leaks memory when constantly switching between programs
             currentProgram.getBackStepper().addObserver(this);
@@ -401,9 +462,9 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
 
         if (taken == failsafe) {
             JOptionPane.showMessageDialog(panel, "VAPOR: could not predict pipeline", "VAPOR", JOptionPane.ERROR_MESSAGE);
+            sendTelemetry(true);
             reset();
             connectButton.doClick();
-            // TODO: telemetry
             System.err.println("VAPOR: could not predict pipeline");
         }
 
@@ -832,5 +893,98 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         sb.append("</html>");
 
         speedup.setText(sb.toString());
+    }
+
+    // --- TELEMETRY ---
+
+    private String getIDM() {
+        // TODO
+        return "am69ogus";
+    }
+
+    private static class TelemetrySender extends Thread {
+        private LinkedBlockingQueue<String> queue;
+
+        public TelemetrySender(LinkedBlockingQueue<String> queue) {
+            this.queue = queue;
+        }
+
+        @Override
+        public void run(){
+            while (true) {
+                try {
+                    // wait for message
+                    String message = queue.take();
+                    if (message == POISON_PILL) {
+                        return;
+                    }
+
+                    // connect to server
+                    Socket socket = new Socket(DOMAIN, PORT);
+                    OutputStream os = socket.getOutputStream();
+
+                    // send length of encrypted key
+                    os.write(encryptedKey.length >> 8);
+                    os.write(encryptedKey.length);
+                    os.flush();
+
+                    // send encrypted symmetric key
+                    os.write(encryptedKey);
+                    os.flush();
+
+                    // encrypt message
+                    Cipher aesCipher = Cipher.getInstance("AES");
+                    aesCipher.init(Cipher.ENCRYPT_MODE, secretKey);
+                    byte[] encryptedData = aesCipher.doFinal(message.getBytes());
+
+                    // send message
+                    os.write(encryptedData);
+                    os.flush();
+
+                    // clean up
+                    os.close();
+                    socket.close();
+                } catch (Exception e) {
+                    return;
+                }
+            }
+        }
+    }
+
+    private void sendTelemetry(boolean crash) {
+        StringBuilder sb = new StringBuilder();
+
+        // message: <IDM># <filename><newline><source code>
+        // will get saved as:
+        //
+        // Folder <IDM>
+        // |
+        // |- <unix-timestamp>.asm
+        // |    |---------------|
+        // |    | <source code> |
+        // |    |---------------|
+
+        String idm = getIDM();
+
+        if (crash) {
+            sb.append(CRASH_IDENTIFIER);
+        } else {
+            sb.append(idm);
+        }
+
+        sb.append("# ");
+        sb.append(idm);
+        sb.append(System.lineSeparator());
+
+        sb.append("# ");
+        sb.append(currentProgram.getFilename());
+        sb.append(System.lineSeparator());
+
+        for (String line : currentProgram.getSourceList()) {
+            sb.append(line);
+            sb.append(System.lineSeparator());
+        }
+
+        telemetryQueue.add(sb.toString());
     }
 }
