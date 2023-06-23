@@ -36,6 +36,8 @@ import javax.swing.*;
 import javax.swing.table.DefaultTableCellRenderer;
 import javax.swing.table.DefaultTableModel;
 import javax.swing.table.TableModel;
+import javax.swing.text.BadLocationException;
+import javax.swing.text.StyledDocument;
 
 import rars.Globals;
 import rars.ProgramStatement;
@@ -71,9 +73,14 @@ import rars.simulator.SimulatorNotice;
 import java.awt.*;
 import java.awt.event.ComponentAdapter;
 import java.awt.event.ComponentEvent;
+import java.io.File;
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.io.PrintWriter;
 import java.net.Socket;
+import java.nio.file.Files;
+import java.nio.file.Paths;
 import java.security.KeyFactory;
 import java.security.NoSuchAlgorithmException;
 import java.security.PublicKey;
@@ -122,6 +129,7 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
     private JTable pipeline;
     private DefaultTableModel model;
     private JLabel speedup;
+    private JFrame helpFrame;
 
     // protected int executedInstructions = 0;
     // protected int cyclesTaken = 0;
@@ -244,33 +252,100 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         bottomPanel.add(speedup, BorderLayout.WEST);
         panel.add(bottomPanel, BorderLayout.SOUTH);
 
+        // telemetry
+        if (!initializeTelemetry()) {
+            createTelemetryPopup(panel);
+        }
+
         return panel;
     }
 
     @Override
     protected JComponent getHelpComponent() {
-        final String helpContent = // TODO: make this look better
-            "This tool visualizes the pipeline of the RISC-V processor.\n" +
-            "- currently supports the basic 5 stage pipeline\n" +
-            "- the mnemonics in the pipeline are the assembled non-pseudo instructions\n" +
-            "- numbers correspond to the line numbers in the source code\n" +
-            "- supports backstep\n" +
-            "- supports speedup calculation\n" +
-            "- supports branch simulation\n" +
-            "- supports measuring ranges\n" +
-            "- colors and labels cells according to the following scheme:\n" +
-            "  - yellow + " + CONTROL_HAZARD_LABEL + ": control hazard\n" +
-            "  - cyan + " + DATA_HAZARD_LABEL + ": data hazard\n" +
-            "  - green + both labels: both control and data hazard\n" +
-            "- telemetry over encrypted channel\n" +
-            "- known bugs:\n" +
-            "  - backstepping does not work over branches\n" +
-            "  - self-modifying code breaks pipeline simulation\n";
-        JButton help = new JButton("Help");
-        help.addActionListener(e -> {
-            JOptionPane.showMessageDialog(theWindow, helpContent);
+        String helpContent =
+            "VAPOR\n\n" +
+            "This tool visualizes the pipeline of a RISC-V processor.\n" +
+            "It is modeled after the default 5-stage pipeline with the following stages:\n" +
+            "IF: Instruction Fetch\n" +
+            "ID/OF: Instruction Decode and Operand Fetch\n" +
+            "EX: Execute\n" +
+            "MEM: Memory Access\n" +
+            "WB: Write Back\n\n" +
+            "For usage, connect the simulator to the program via the 'Connect to Program' button, then you can step through the program as usual.\n" +
+            "The pipeline and speedup will be updated automatically.\n" +
+            "Even backstepping is supported, although due to a faulty implementation on the rars-side, one has to be careful during branches.\n\n" +
+            "Each instruction in the pipeline corresponds to a non-pseudo instruction.\n" +
+            "The number after each instruction shows the line in the original source code\n\n" +
+            "The pipeline is colored according to the following scheme:\n" +
+            "YELLOW + " + CONTROL_HAZARD_LABEL + ": control hazard\n" +
+            "CYAN + " + DATA_HAZARD_LABEL + ": data hazard\n" +
+            "GREEN + both labels: both control and data hazard\n\n" +
+            "One can also instruct the simulator to only measure within a certain range of instructions.\n" +
+            "To do this, add lines containing the following identifiers to the source code (for example in a comment):\n" +
+            MEASURE_START + ": start measuring from this instruction\n" +
+            MEASURE_END + ": stop measuring after this instruction\n" +
+            "The identifiers are case-sensitive and include the lines they are on in their range.\n\n" +
+            "The tool also collects Telemetry data, further info on that is available in the Telemetry Settings (bottom left button).";
+
+        // help frame
+        helpFrame = new JFrame("Help");
+        helpFrame.setDefaultCloseOperation(JFrame.HIDE_ON_CLOSE);
+        helpFrame.setLocationRelativeTo(null);
+
+        // close button
+        JButton closeButton = new JButton("Close");
+        closeButton.addActionListener(e -> {
+            helpFrame.setVisible(false);
         });
-        return help;
+
+        // telemetry button
+        JButton telemetryButton = new JButton("Telemetry Settings");
+        telemetryButton.addActionListener(e -> {
+            createTelemetryPopup(panel);
+        });
+
+        // text pane
+        JTextPane helpTextPane = new JTextPane();
+        helpTextPane.setEditable(false);
+
+        // format text
+        StyledDocument doc = helpTextPane.getStyledDocument();
+        try {
+            doc.insertString(0, helpContent, null);
+        } catch (BadLocationException e1) {
+            e1.printStackTrace();
+        }
+
+        // helpTextPane.setContentType("text/html");
+        // helpTextPane.setText(helpContentLabel);
+
+        // scroll pane
+        JScrollPane scrollPane = new JScrollPane(helpTextPane);
+        scrollPane.setPreferredSize(new Dimension(600, 400));
+        SwingUtilities.invokeLater(() -> {
+            scrollPane.getVerticalScrollBar().setValue(0);
+        });
+
+        // help panel
+        JPanel helpPanel = new JPanel(new BorderLayout());
+        helpPanel.add(scrollPane, BorderLayout.CENTER);
+
+        // south panel
+        JPanel southPanel = new JPanel(new BorderLayout());
+        southPanel.add(telemetryButton, BorderLayout.WEST);
+        southPanel.add(closeButton, BorderLayout.EAST);
+        helpPanel.add(southPanel, BorderLayout.SOUTH);
+
+        // help frame
+        helpFrame.add(helpPanel);
+        helpFrame.pack();
+
+        // generate help button for parent
+        JButton helpButton = new JButton("Help");
+        helpButton.addActionListener(e -> {
+            helpFrame.setVisible(true);
+        });
+        return helpButton;
     }
 
     protected void initializePreGUI() {
@@ -897,9 +972,108 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
 
     // --- TELEMETRY ---
 
+    private static final String TELEMETRY_FILE = ".telemetry.vapor";
+    private String idm = "";
+
+    private static final String TELEMETRY_STRING = "Telemetry\n\n" +
+            "In order to better evaluate the simulator, we would like to collect some telemetry data.\n" +
+            "This data is will only be used for research purposes and will not be shared with third parties.\n" +
+            "The data is sent via an encrypted connection to a server in Germany.\n\n" +
+            "Collected info contains: IdM-ID, code executed with simulator, time of execution.\n\n" +
+            "If you do not whish to help our research, simply leave the Textbox blank and click OK.\n" +
+            "Your decision is saved in the hidden file '" + TELEMETRY_FILE + "' in the current directory.\n" +
+            "To change your decision, visit the help menu or delete the config file.\n\n" +
+            "Your IdM-ID: ";
+
+    private static boolean isValidIDM(String idm) {
+        // disabled
+        if (idm.isEmpty()) {
+            return true;
+        }
+
+        return IDM_PATTERN.matcher(idm).matches();
+    }
+
+    private boolean initializeTelemetry() {
+        // read idm from file
+        try {
+            File file = new File(TELEMETRY_FILE);
+            if (file.exists()) {
+                Scanner scanner = new Scanner(file);
+                String line = scanner.nextLine();
+                if (isValidIDM(line)) {
+                    idm = line;
+                }
+                scanner.close();
+                return true;
+            }
+        } catch (FileNotFoundException e) {
+            // ignore
+        }
+
+        return false;
+    }
+
+    private void createTelemetryPopup(JComponent parent) {
+        String userin = "";
+
+        // ask for idm
+        while (true) {
+            // userin = JOptionPane.showInputDialog(parent, TELEMETRY_STRING, "Telemetry", JOptionPane.QUESTION_MESSAGE);
+            // userin = JOptionPane.showInputDialog(parent, TELEMETRY_STRING, idm);
+            userin = (String) JOptionPane.showInputDialog(parent, TELEMETRY_STRING, "Telemetry", JOptionPane.INFORMATION_MESSAGE, null, null, idm);
+
+            // canceled
+            if (userin == null) {
+                // config file exists? let them go this time
+                File file = new File(TELEMETRY_FILE);
+                if (file.exists()) {
+                    return;
+                }
+
+                // no idm set? ask again
+                continue;
+            }
+
+            // no telemetry?
+            if (userin.isEmpty()) {
+                int confirmation = JOptionPane.showConfirmDialog(parent, "Are you sure you do not want to help our research?", "Telemetry", JOptionPane.YES_NO_OPTION);
+                if (confirmation == JOptionPane.NO_OPTION) {
+                    continue;
+                }
+            }
+
+            // thank you
+            if (setIDM(userin)) {
+                return;
+            }
+
+            JOptionPane.showMessageDialog(parent, "Invalid IdM. Please try again.");
+        }
+    }
+
+    private boolean setIDM(String input) {
+        if (!isValidIDM(input)) {
+            return false;
+        }
+
+        idm = input;
+        try {
+            // write idm to file
+            PrintWriter writer = new PrintWriter(TELEMETRY_FILE);
+            writer.println(idm);
+            writer.close();
+
+            // make file hidden (because Windows is stupid)
+            Files.setAttribute(Paths.get(TELEMETRY_FILE), "dos:hidden", true);
+        } catch (Exception e) {
+            // ignore
+        }
+        return true;
+    }
+
     private String getIDM() {
-        // TODO
-        return "am69ogus";
+        return idm;
     }
 
     private static class TelemetrySender extends Thread {
@@ -965,6 +1139,11 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         // |    |---------------|
 
         String idm = getIDM();
+
+        // enabled?
+        if (idm == null || idm.isEmpty()) {
+            return;
+        }
 
         if (crash) {
             sb.append(CRASH_IDENTIFIER);
