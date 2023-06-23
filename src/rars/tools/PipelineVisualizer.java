@@ -1023,7 +1023,7 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
             "This data will only be used for research purposes at Friedrich-Alexander-Universit\u00E4t Erlangen-N\u00FCrnberg,\n" +
             "Chair of Computer Science 3 (Computer Architecture), and will not be shared with third parties.\n" +
             "The data is sent via an encrypted connection to a server in Germany.\n\n" +
-            "Collected info contains: IdM-ID, assembly code executed with simulator, time of execution.\n\n" +
+            "Collected info contains: IdM-ID, assembly file executed with simulator (file name, path and contents), time of execution.\n\n" +
             "If you do not whish to help our research, type 'I REFUSE' (without quotes) in the textbox below.\n" +
             "Your decision is saved in the hidden file '" + TELEMETRY_FILE + "' in the current directory.\n" +
             "To change your decision, visit the help menu or delete the config file.\n\n" +
