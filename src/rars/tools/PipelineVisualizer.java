@@ -37,6 +37,8 @@ import javax.swing.table.DefaultTableCellRenderer;
 import javax.swing.table.DefaultTableModel;
 import javax.swing.table.TableModel;
 import javax.swing.text.BadLocationException;
+import javax.swing.text.SimpleAttributeSet;
+import javax.swing.text.StyleConstants;
 import javax.swing.text.StyledDocument;
 
 import rars.Globals;
@@ -96,10 +98,8 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
     // TODO: REFACTOR!!!
     // TODO: make things static and final where possible
 
-    // TODO: help button
     // TODO: standalone application
     // TODO: other pipeline types
-    // TODO: user statistics (telemetry) - each time pipeline init
 
     // FETCH, DECODE, OPERAND FETCH, EXECUTE, WRITE BACK
     private static final int STAGES = 5; // TODO: utilize this generally?
@@ -182,6 +182,8 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         for (int i = 0; i < STAGES+1; i++) {
             colors.add(new HashMap<>());
         }
+
+        this.setAlwaysOnTop(true); // does this even do anything?
 
         panel = new JPanel(new BorderLayout());
 
@@ -285,11 +287,12 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
             MEASURE_START + ": start measuring from this instruction\n" +
             MEASURE_END + ": stop measuring after this instruction\n" +
             "The identifiers are case-sensitive and include the lines they are on in their range.\n\n" +
-            "The tool also collects Telemetry data, further info on that is available in the Telemetry Settings (bottom left button).";
+            "The tool also collects telemetry data, further info on that is available in the telemetry settings.";
 
         // help frame
         helpFrame = new JFrame("Help");
         helpFrame.setDefaultCloseOperation(JFrame.HIDE_ON_CLOSE);
+        helpFrame.setAlwaysOnTop(true);
         helpFrame.setLocationRelativeTo(null);
 
         // close button
@@ -312,6 +315,49 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         StyledDocument doc = helpTextPane.getStyledDocument();
         try {
             doc.insertString(0, helpContent, null);
+
+            // VAPOR title
+            SimpleAttributeSet title = new SimpleAttributeSet();
+            StyleConstants.setFontSize(title, 20);
+            StyleConstants.setBold(title, true);
+            StyleConstants.setAlignment(title, StyleConstants.ALIGN_CENTER);
+            doc.setParagraphAttributes(0, 5, title, false);
+
+            // pipeline stages bold
+            SimpleAttributeSet bold = new SimpleAttributeSet();
+            StyleConstants.setBold(bold, true);
+            doc.setCharacterAttributes(helpContent.indexOf("IF"), 3, bold, false);
+            doc.setCharacterAttributes(helpContent.indexOf("ID/OF"), 6, bold, false);
+            doc.setCharacterAttributes(helpContent.indexOf("EX"), 3, bold, false);
+            doc.setCharacterAttributes(helpContent.indexOf("MEM"), 4, bold, false);
+            doc.setCharacterAttributes(helpContent.indexOf("WB"), 3, bold, false);
+
+            // connect to program bold
+            doc.setCharacterAttributes(helpContent.indexOf("Connect to Program"), 19, bold, false);
+
+            // measure start/end bold
+            doc.setCharacterAttributes(helpContent.indexOf(MEASURE_START), MEASURE_START.length(), bold, false);
+            doc.setCharacterAttributes(helpContent.indexOf(MEASURE_END), MEASURE_END.length(), bold, false);
+
+            // hazard labels bold and colored
+
+            // control hazard
+            SimpleAttributeSet controlHazard = new SimpleAttributeSet();
+            StyleConstants.setBold(controlHazard, true);
+            StyleConstants.setBackground(controlHazard, Color.YELLOW);
+            doc.setCharacterAttributes(helpContent.indexOf("YELLOW"), 11, controlHazard, false);
+
+            // data hazard
+            SimpleAttributeSet dataHazard = new SimpleAttributeSet();
+            StyleConstants.setBold(dataHazard, true);
+            StyleConstants.setBackground(dataHazard, Color.CYAN);
+            doc.setCharacterAttributes(helpContent.indexOf("CYAN"), 9, dataHazard, false);
+
+            // both hazards
+            SimpleAttributeSet bothHazard = new SimpleAttributeSet();
+            StyleConstants.setBold(bothHazard, true);
+            StyleConstants.setBackground(bothHazard, Color.GREEN);
+            doc.setCharacterAttributes(helpContent.indexOf("GREEN"), 19, bothHazard, false);
         } catch (BadLocationException e1) {
             e1.printStackTrace();
         }
@@ -949,7 +995,7 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         // assume 1 cycle per stage with pipeline, 5 cycles per stage without (i e all stalls)
 
         int instructionsExecuted = backstepStack.size();
-        int totalCyclesTaken = model.getRowCount();
+        int totalCyclesTaken = Math.max(1, model.getRowCount());
 
         StringBuilder sb = new StringBuilder();
         sb.append("<html>");
@@ -962,7 +1008,7 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         sb.append(String.format("%.2f", (double) STAGES * instructionsExecuted / totalCyclesTaken));
         sb.append("<br/>");
 
-        sb.append("Maximum achievable speedup: ");
+        sb.append("Speedup without hazards: ");
         sb.append(String.format("%.2f", (double) STAGES * instructionsExecuted / (STAGES + instructionsExecuted - 1)));
 
         sb.append("</html>");
@@ -977,13 +1023,14 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
 
     private static final String TELEMETRY_STRING = "Telemetry\n\n" +
             "In order to better evaluate the simulator, we would like to collect some telemetry data.\n" +
-            "This data is will only be used for research purposes and will not be shared with third parties.\n" +
+            "This data will only be used for research purposes at Friedrich-Alexander-Universit\u00E4t Erlangen-N\u00FCrnberg,\n" +
+            "Chair of Computer Science 3 (Computer Architecture), and will not be shared with third parties.\n" +
             "The data is sent via an encrypted connection to a server in Germany.\n\n" +
-            "Collected info contains: IdM-ID, code executed with simulator, time of execution.\n\n" +
-            "If you do not whish to help our research, simply leave the Textbox blank and click OK.\n" +
+            "Collected info contains: IdM-ID, assembly code executed with simulator, time of execution.\n\n" +
+            "If you do not whish to help our research, type 'I REFUSE' (without quotes) in the textbox below.\n" +
             "Your decision is saved in the hidden file '" + TELEMETRY_FILE + "' in the current directory.\n" +
             "To change your decision, visit the help menu or delete the config file.\n\n" +
-            "Your IdM-ID: ";
+            "Your IdM-ID (e.g. xy89abcd):";
 
     private static boolean isValidIDM(String idm) {
         // disabled
@@ -1035,8 +1082,15 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
                 continue;
             }
 
-            // no telemetry?
+            // empty input
             if (userin.isEmpty()) {
+                JOptionPane.showMessageDialog(parent, "Please enter your IdM-ID.");
+                continue;
+            }
+
+            // no telemetry?
+            if (userin.equals("I REFUSE")) {
+                userin = "";
                 int confirmation = JOptionPane.showConfirmDialog(parent, "Are you sure you do not want to help our research?", "Telemetry", JOptionPane.YES_NO_OPTION);
                 if (confirmation == JOptionPane.NO_OPTION) {
                     continue;
