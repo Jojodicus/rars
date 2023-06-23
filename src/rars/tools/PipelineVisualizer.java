@@ -183,8 +183,6 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
             colors.add(new HashMap<>());
         }
 
-        this.setAlwaysOnTop(true); // does this even do anything?
-
         panel = new JPanel(new BorderLayout());
 
         model = new DefaultTableModel();
@@ -292,7 +290,6 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         // help frame
         helpFrame = new JFrame("Help");
         helpFrame.setDefaultCloseOperation(JFrame.HIDE_ON_CLOSE);
-        helpFrame.setAlwaysOnTop(true);
         helpFrame.setLocationRelativeTo(null);
 
         // close button
