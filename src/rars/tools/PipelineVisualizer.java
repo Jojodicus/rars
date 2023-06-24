@@ -604,7 +604,7 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         // TODO: change to generic for-loop
 
         ProgramStatement next = nextInstruction();
-        int controlHazard = hasControlHazard();
+        Set<Integer> controlHazard = hasControlHazard();
         Set<Integer> dataHazard = hasDataHazard();
 
         // MEM -> WB
@@ -619,21 +619,37 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
             currentPipeline[STAGE.EX] = null;
             return currentPipeline[STAGE.WB];
         }
+        if (!controlHazard.isEmpty()) { // possible control hazard
+            // one last push
+            if (controlHazard.size() == 1 && controlHazard.contains(CONTROL_HAZARD_DETECT)) {
+                currentPipeline[STAGE.EX] = currentPipeline[STAGE.IDOF];
+                currentPipeline[STAGE.IDOF] = currentPipeline[STAGE.IF];
+                currentPipeline[STAGE.IF] = next;
+                return currentPipeline[STAGE.WB];
+            }
+
+            // flush? and stall
+            if (controlHazard.contains(CONTROL_HAZARD_RESOLVE)) {
+                // "prediction" correct
+                if (currentPipeline[STAGE.IDOF].equals(next)) {
+                    currentPipeline[STAGE.EX] = null;
+                    return currentPipeline[STAGE.WB];
+                }
+
+                // "prediction" wrong -> flush
+                currentPipeline[STAGE.EX] = null;
+                currentPipeline[STAGE.IDOF] = null;
+                currentPipeline[STAGE.IF] = next;
+                return currentPipeline[STAGE.WB];
+            }
+
+            // stall
+            currentPipeline[STAGE.EX] = null;
+            return currentPipeline[STAGE.WB];
+        }
         currentPipeline[STAGE.EX] = currentPipeline[STAGE.IDOF];
 
         // IF -> IDOF
-        // control hazard
-        if (controlHazard != -1) { // stall
-            currentPipeline[STAGE.IDOF] = null;
-
-            // resolving?
-            if (controlHazard == CONTROL_HAZARD_RESOLVE) {
-                // update next instruction
-                currentPipeline[STAGE.IF] = next;
-            }
-
-            return currentPipeline[STAGE.WB];
-        }
         currentPipeline[STAGE.IDOF] = currentPipeline[STAGE.IF];
 
         // next IF
@@ -765,16 +781,16 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         return collisions;
     }
 
-    private int hasControlHazard() {
-        // branch instruction at ID, OF or EX
+    private Set<Integer> hasControlHazard() {
+        Set<Integer> collisions = new HashSet<>();
 
         for (int i = CONTROL_HAZARD_DETECT; i <= CONTROL_HAZARD_RESOLVE; i++) {
             if (isBranchInstruction(currentPipeline[i])) {
-                return i;
+                collisions.add(i);
             }
         }
 
-        return -1;
+        return collisions;
     }
 
     // TODO: refactor this out
@@ -940,7 +956,7 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
 
     private void updateTable() {
         int rows = model.getRowCount();
-        int controlHazard = hasControlHazard();
+        Set<Integer> controlHazards = hasControlHazard();
         Set<Integer> dataHazards = hasDataHazard();
 
         Object[] newrow = new Object[STAGES+1];
@@ -951,7 +967,7 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
             if (dataHazards.contains(i)) {
                 sb.append(DATA_HAZARD_LABEL);
             }
-            if (controlHazard == i) {
+            if (controlHazards.contains(i)) {
                 sb.append(CONTROL_HAZARD_LABEL);
             }
             newrow[i+1] = sb.toString();
@@ -966,12 +982,14 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         colors.get(0).putIfAbsent(rows, Color.LIGHT_GRAY);
 
         // control hazard
-        if (controlHazard != -1) {
-            colors.get(controlHazard+1).put(rows, Color.YELLOW);
+        for (int stage : controlHazards) {
+            stage++; // +1 because of cycle column
+
+            colors.get(stage).put(rows, Color.YELLOW);
         }
 
         // data hazard
-        for (int stage : hasDataHazard()) {
+        for (int stage : dataHazards) {
             stage++; // +1 because of cycle column
 
             // already has control hazard
@@ -1023,7 +1041,7 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
             "This data will only be used for research purposes at Friedrich-Alexander-Universit\u00E4t Erlangen-N\u00FCrnberg,\n" +
             "Chair of Computer Science 3 (Computer Architecture), and will not be shared with third parties.\n" +
             "The data is sent via an encrypted connection to a server in Germany.\n\n" +
-            "Collected info contains: IdM-ID, assembly file executed with simulator (file name, path and contents), time of execution.\n\n" +
+            "Collected info contains: IdM-ID, assembly code executed with simulator (file name and contents), time of execution.\n\n" +
             "If you do not whish to help our research, type 'I REFUSE' (without quotes) in the textbox below.\n" +
             "Your decision is saved in the hidden file '" + TELEMETRY_FILE + "' in the current directory.\n" +
             "To change your decision, visit the help menu or delete the config file.\n\n" +
@@ -1206,9 +1224,15 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         sb.append(idm);
         sb.append(System.lineSeparator());
 
-        sb.append("# ");
-        sb.append(currentProgram.getFilename());
-        sb.append(System.lineSeparator());
+        // get file name (without path)
+        String filename = currentProgram.getFilename();
+        int index = filename.lastIndexOf(File.separator);
+        if (index != -1) {
+            filename = filename.substring(index + 1);
+            sb.append("# ");
+            sb.append(filename);
+            sb.append(System.lineSeparator());
+        }
 
         for (String line : currentProgram.getSourceList()) {
             sb.append(line);
