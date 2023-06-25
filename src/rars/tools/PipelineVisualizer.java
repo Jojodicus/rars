@@ -617,6 +617,12 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         // data hazard
         if (dataHazard.contains(STAGE.IDOF)) { // stall
             currentPipeline[STAGE.EX] = null;
+            // flush and stall cuz control hazard resolving, TODO: clean this up
+            if (controlHazard.contains(CONTROL_HAZARD_RESOLVE)) {
+                currentPipeline[STAGE.IDOF] = null;
+                currentPipeline[STAGE.IF] = next;
+                return currentPipeline[STAGE.WB];
+            }
             return currentPipeline[STAGE.WB];
         }
         if (!controlHazard.isEmpty()) { // possible control hazard
@@ -628,15 +634,8 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
                 return currentPipeline[STAGE.WB];
             }
 
-            // flush? and stall
+            // flush and stall
             if (controlHazard.contains(CONTROL_HAZARD_RESOLVE)) {
-                // "prediction" correct
-                if (currentPipeline[STAGE.IDOF].equals(next)) {
-                    currentPipeline[STAGE.EX] = null;
-                    return currentPipeline[STAGE.WB];
-                }
-
-                // "prediction" wrong -> flush
                 currentPipeline[STAGE.EX] = null;
                 currentPipeline[STAGE.IDOF] = null;
                 currentPipeline[STAGE.IF] = next;
