@@ -284,7 +284,8 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
             "To do this, add lines containing the following identifiers to the source code (for example in a comment):\n" +
             MEASURE_START + ": start measuring from this instruction\n" +
             MEASURE_END + ": stop measuring after this instruction\n" +
-            "The identifiers are case-sensitive and include the lines they are on in their range.\n\n" +
+            "The identifiers are case-sensitive and include the lines they are on in their range.\n" +
+            "During execution, when the start of such a region is reached, the cycle will be highlighted in DARK GRAY.\n\n" +
             "The tool also collects telemetry data, further info on that is available in the telemetry settings.";
 
         // help frame
@@ -427,7 +428,7 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         for (int i = 0; i < STAGES; i++) {
             currentPipeline[i] = null;
         }
-        for (var map : colors) {
+        for (Map<Integer, Color> map : colors) {
             map.clear();
         }
         backstepStack.clear();
