@@ -41,17 +41,17 @@ import javax.swing.text.SimpleAttributeSet;
 import javax.swing.text.StyleConstants;
 import javax.swing.text.StyledDocument;
 
+import rars.AssemblyException;
 import rars.Globals;
 import rars.ProgramStatement;
 import rars.RISCVprogram;
+import rars.Settings;
+import rars.SimulationException;
+import rars.api.Program;
 import rars.assembler.SourceLine;
 import rars.riscv.BasicInstruction;
 import rars.riscv.Instruction;
-import rars.riscv.hardware.AccessNotice;
-import rars.riscv.hardware.AddressErrorException;
-import rars.riscv.hardware.Memory;
-import rars.riscv.hardware.MemoryAccessNotice;
-import rars.riscv.hardware.RegisterFile;
+import rars.riscv.hardware.*;
 import rars.riscv.instructions.AUIPC;
 import rars.riscv.instructions.Arithmetic;
 import rars.riscv.instructions.Branch;
@@ -125,6 +125,7 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
     private static final String VERSION = "1.0 (Johannes Dittrich)";
     private static final String HEADING = "Visualizer for advanced pipelining on RARS";
 
+    private boolean gui_enabled = true;
     private JPanel panel;
     private JTable pipeline;
     private DefaultTableModel model;
@@ -156,6 +157,82 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
 
     public PipelineVisualizer() {
         super(NAME + ", " + VERSION, HEADING);
+    }
+
+    // run stand-alone, with rars as a backend
+    // by providing a file (alongside optional arguments for it) as parameters, we can run it instantly
+    // by prepending --nogui, we can turn off the gui to make it even faster, getting a parsable summary on stdout
+    public static void main(String[] args) {
+        PipelineVisualizer vapor = new PipelineVisualizer();
+
+        // TODO: clean up
+
+        int program_arg = 0; // where the name of the executed program should start
+        if (args.length > 0 && args[0].equals("--nogui")) {
+            vapor.gui_enabled = false; // TODO: implement
+            program_arg++;
+        }
+
+        vapor.go();
+
+        // run program
+        if (args.length > program_arg) {
+            String program_name = args[program_arg];
+            ArrayList<String> parameters = new ArrayList<>(Arrays.asList(Arrays.copyOfRange(args, program_arg+1, args.length)));
+
+            // wont show in gui
+            // Program program = new Program();
+            // try {
+            //     program.assemble(program_name);
+            // } catch (AssemblyException asex) {
+            //     System.err.println(asex.errors().generateErrorReport());
+            // }
+            // program.setup(parameters, "");
+            // try {
+            //     program.simulate();
+            // } catch (SimulationException simex) {
+            //     System.err.println(simex.error().generateReport());
+            // }
+
+            RISCVprogram program = new RISCVprogram();
+            rars.Globals.program = program;
+            ArrayList<RISCVprogram> programsToAssemble;
+            try {
+                ArrayList<String> program_arraylist = new ArrayList<>();
+                program_arraylist.add(program_name);
+                programsToAssemble = program.prepareFilesForAssembly(program_arraylist, program_name, null);
+            } catch (AssemblyException pe) {
+                return;
+            }
+            try {
+                program.assemble(programsToAssemble, Globals.getSettings().getBooleanSetting(Settings.Bool.EXTENDED_ASSEMBLER_ENABLED),
+                        Globals.getSettings().getBooleanSetting(Settings.Bool.WARNINGS_ARE_ERRORS));
+            } catch (AssemblyException pe) {
+                return;
+            }
+            RegisterFile.resetRegisters();
+            FloatingPointRegisterFile.resetRegisters();
+            ControlAndStatusRegisterFile.resetRegisters();
+            InterruptController.reset();
+            vapor.addAsObserver();
+            // vapor.observing = true; // seems like this doesn't impact results
+
+            final Observer stopListener =
+                    new Observer() {
+                        public void update(Observable o, Object simulator) {
+                            SimulatorNotice notice = ((SimulatorNotice) simulator);
+                            if (notice.getAction() != SimulatorNotice.SIMULATOR_STOP) return;
+                            vapor.deleteAsObserver();
+                            // vapor.observing = false;
+                            o.deleteObserver(this);
+
+                            System.out.printf("Instructions executed: %d%n", vapor.backstepStack.size());
+                            // ...
+                        }
+                    };
+            Simulator.getInstance().addObserver(stopListener);
+            program.startSimulation(-1, null);
+        }
     }
 
     @Override
