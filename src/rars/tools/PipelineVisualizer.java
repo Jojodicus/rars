@@ -180,20 +180,6 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
             String program_name = args[program_arg];
             ArrayList<String> parameters = new ArrayList<>(Arrays.asList(Arrays.copyOfRange(args, program_arg+1, args.length)));
 
-            // wont show in gui
-            // Program program = new Program();
-            // try {
-            //     program.assemble(program_name);
-            // } catch (AssemblyException asex) {
-            //     System.err.println(asex.errors().generateErrorReport());
-            // }
-            // program.setup(parameters, "");
-            // try {
-            //     program.simulate();
-            // } catch (SimulationException simex) {
-            //     System.err.println(simex.error().generateReport());
-            // }
-
             RISCVprogram program = new RISCVprogram();
             rars.Globals.program = program;
             ArrayList<RISCVprogram> programsToAssemble;
@@ -226,8 +212,18 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
                             // vapor.observing = false;
                             o.deleteObserver(this);
 
-                            System.out.printf("Instructions executed: %d%n", vapor.backstepStack.size());
-                            // ...
+                            if (notice.getReason() != Simulator.Reason.NORMAL_TERMINATION) {
+                                System.err.println("something went wrong");
+                                System.exit(1);
+                            }
+
+                            String speedupInfo = vapor.speedup.getText();
+                            speedupInfo = speedupInfo.replace("<html>", "");
+                            speedupInfo = speedupInfo.replace("</html>", "");
+                            speedupInfo = speedupInfo.replace("<br/>", "\n");
+                            System.out.println(speedupInfo);
+                            // TODO: number of hazards, check unchanged semantics, ...
+                            System.exit(0); // yeet
                         }
                     };
             Simulator.getInstance().addObserver(stopListener);
@@ -1033,6 +1029,7 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         // }
     }
 
+    // TODO: make info easily accessible from outside
     private void updateSpeedupText() {
         // assume 1 cycle per stage with pipeline, 5 cycles per stage without (i e all stalls)
 
