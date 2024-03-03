@@ -99,7 +99,7 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
     // TODO: make things static and final where possible
 
     // TODO: standalone application
-    // TODO: other pipeline types
+    // TODO: other pipeline types, branch prediction, forwarding
 
     // FETCH, DECODE, OPERAND FETCH, EXECUTE, WRITE BACK
     private static final int STAGES = 5; // TODO: utilize this generally?
@@ -130,6 +130,7 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
     private DefaultTableModel model;
     private JLabel speedup;
     private JFrame helpFrame;
+    private JLabel quickstart;
 
     // protected int executedInstructions = 0;
     // protected int cyclesTaken = 0;
@@ -169,6 +170,9 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         }
 
         panel = new JPanel(new BorderLayout());
+
+        quickstart = new JLabel("<html>To get started, connect this tool to your program, then run your program as normal.<br/>Click the help button below for further information.</html>");
+        panel.add(quickstart, BorderLayout.NORTH);
 
         model = new DefaultTableModel();
         model.addColumn("CYCLE");
@@ -251,9 +255,9 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
             "EX: Execute\n" +
             "MEM: Memory Access\n" +
             "WB: Write Back\n\n" +
-            "For usage, connect the simulator to the program via the 'Connect to Program' button, then you can step through the program as usual.\n" +
+            "To use, connect the simulator to the program via the 'Connect to Program' button, then, you can step through the program as usual.\n" +
             "The pipeline and speedup will be updated automatically.\n" +
-            "Even backstepping is supported, although due to a faulty implementation on the rars-side, one has to be careful during branches.\n\n" +
+            "Even backstepping is supported, although due to a faulty implementation on the rars-side, one has to be careful with branches.\n\n" +
             "Each instruction in the pipeline corresponds to a non-pseudo instruction.\n" +
             "The number after each instruction shows the line in the original source code\n\n" +
             "The pipeline is colored according to the following scheme:\n" +
@@ -265,8 +269,7 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
             MEASURE_START + ": start measuring from this instruction\n" +
             MEASURE_END + ": stop measuring after this instruction\n" +
             "The identifiers are case-sensitive and include the lines they are on in their range.\n" +
-            "During execution, when the start of such a region is reached, the cycle will be highlighted in DARK GRAY.\n\n" +
-            "The tool also collects telemetry data, further info on that is available in the telemetry settings.";
+            "During execution, when the start of such a region is reached, the cycle will be highlighted in DARK GRAY.";
 
         // help frame
         helpFrame = new JFrame("Help");
@@ -330,6 +333,13 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
             StyleConstants.setBold(bothHazard, true);
             StyleConstants.setBackground(bothHazard, Color.GREEN);
             doc.setCharacterAttributes(helpContent.indexOf("GREEN"), 19, bothHazard, false);
+
+            // measuring ranges
+            SimpleAttributeSet measureRange = new SimpleAttributeSet();
+            StyleConstants.setBold(measureRange, true);
+            StyleConstants.setBackground(measureRange, Color.DARK_GRAY);
+            StyleConstants.setForeground(measureRange, Color.WHITE);
+            doc.setCharacterAttributes(helpContent.indexOf("DARK GRAY"), 9, measureRange, false);
         } catch (BadLocationException e1) {
             e1.printStackTrace();
         }
