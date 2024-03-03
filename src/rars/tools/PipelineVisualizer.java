@@ -149,21 +149,6 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
     private Stack<Integer> backstepStack = new Stack<>();
     private Stack<ProgramStatement[]> backstepPipelineStack = new Stack<>();
 
-    // telemetry
-    private static final String DOMAIN = "gra.dittrich.pro";
-    private static final int PORT = 7181;
-    public static final int IDM_LENGTH = 8;
-    public static final Pattern IDM_PATTERN = Pattern.compile("[a-z]{2}[0-9]{2}[a-z]{4}");
-    private static final String CRASH_IDENTIFIER = "crashing"; // note: has to be IDM_LENGTH characters long
-    private static final String POISON_PILL = "POISON_PILL";
-    LinkedBlockingQueue<String> telemetryQueue = new LinkedBlockingQueue<>();
-    private TelemetrySender telemetrySender;
-
-    // crypto stuff
-    private static final String PUBLIC_KEY = "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAzQ0JkilZyRhMnrnK77r1fUBTV+dmYVPmyQn//dp6a8TfgGRmctpWbG86kVgbpUXr46gjkI50mcfnjoNmMCiSs7jX5nkkroDoMJOMvTcyXooguvN1Hl4+reBrxySBJRpOM/d5vK4hwaw1UPT7i28Ar2vbMMh4f4ci06I8dzI/NrxyF5NpQU9VierfjzkD0iae3XIn1E/9lszy634UmzgTPllZceRcfUUWMf1MTKyHdbxAqEhktuTEVCI0QHG1+2MjpSoezVgYrhlf46XGz5eiyIQVjWlpjyYt5sCZIoINtTPn4O9z3ad4Gkpv2Jfcm+sibNiC1fWBwn+SlaJ5mS8MfwIDAQAB";
-    private static SecretKey secretKey;
-    private static byte[] encryptedKey;
-
     public PipelineVisualizer(String title, String heading) {
         super(title, heading);
     }
@@ -252,11 +237,6 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         bottomPanel.add(speedup, BorderLayout.WEST);
         panel.add(bottomPanel, BorderLayout.SOUTH);
 
-        // telemetry
-        if (!initializeTelemetry()) {
-            createTelemetryPopup(panel);
-        }
-
         return panel;
     }
 
@@ -297,12 +277,6 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         JButton closeButton = new JButton("Close");
         closeButton.addActionListener(e -> {
             helpFrame.setVisible(false);
-        });
-
-        // telemetry button
-        JButton telemetryButton = new JButton("Telemetry Settings");
-        telemetryButton.addActionListener(e -> {
-            createTelemetryPopup(panel);
         });
 
         // text pane
@@ -376,7 +350,6 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
 
         // south panel
         JPanel southPanel = new JPanel(new BorderLayout());
-        southPanel.add(telemetryButton, BorderLayout.WEST);
         southPanel.add(closeButton, BorderLayout.EAST);
         helpPanel.add(southPanel, BorderLayout.SOUTH);
 
@@ -390,35 +363,6 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
             helpFrame.setVisible(true);
         });
         return helpButton;
-    }
-
-    protected void initializePreGUI() {
-        // initialize crypto stuff
-        try {
-            byte[] publicKeyBytes = Base64.getDecoder().decode(PUBLIC_KEY);
-            KeyFactory keyFactory = KeyFactory.getInstance("RSA");
-            PublicKey publicKey = keyFactory.generatePublic(new X509EncodedKeySpec(publicKeyBytes));
-
-            // generate AES key
-            secretKey = KeyGenerator.getInstance("AES").generateKey();
-
-            // encrypt AES key using RSA
-            Cipher rsaCipher = Cipher.getInstance("RSA/ECB/PKCS1Padding");
-            rsaCipher.init(Cipher.ENCRYPT_MODE, publicKey);
-            encryptedKey = rsaCipher.doFinal(secretKey.getEncoded());
-        } catch (Exception e) {
-            e.printStackTrace();
-            return;
-        }
-
-        // initialize telemetry
-        telemetrySender = new TelemetrySender(telemetryQueue);
-        telemetrySender.start();
-    }
-
-    protected void performSpecialClosingDuties() {
-        // send poison pill to telemetry thread
-        telemetryQueue.add(POISON_PILL);
     }
 
     @Override
@@ -505,9 +449,6 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
             // set program
             currentProgram = Globals.program;
 
-            // send telemetry
-            sendTelemetry(false);
-
             // yes, this probably leaks memory when constantly switching between programs
             currentProgram.getBackStepper().addObserver(this);
 
@@ -581,7 +522,6 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
 
         if (taken == failsafe) {
             JOptionPane.showMessageDialog(panel, "VAPOR: could not predict pipeline", "VAPOR", JOptionPane.ERROR_MESSAGE);
-            sendTelemetry(true);
             reset();
             connectButton.doClick();
             System.err.println("VAPOR: could not predict pipeline");
@@ -1029,216 +969,5 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         sb.append("</html>");
 
         speedup.setText(sb.toString());
-    }
-
-    // --- TELEMETRY ---
-
-    private static final String TELEMETRY_FILE = ".telemetry.vapor";
-    private String idm = "";
-
-    private static final String TELEMETRY_STRING = "Telemetry\n\n" +
-            "In order to better evaluate the simulator, we would like to collect some telemetry data.\n" +
-            "This data will only be used for research purposes at Friedrich-Alexander-Universit\u00E4t Erlangen-N\u00FCrnberg,\n" +
-            "Chair of Computer Science 3 (Computer Architecture), and will not be shared with third parties.\n" +
-            "The data is sent via an encrypted connection to a server in Germany.\n\n" +
-            "Collected info contains: IdM-ID, assembly code executed with simulator (file name and contents), time of execution.\n\n" +
-            "If you do not whish to help our research, type 'I REFUSE' (without quotes) in the textbox below.\n" +
-            "Your decision is saved in the hidden file '" + TELEMETRY_FILE + "' in the current directory.\n" +
-            "To change your decision, visit the help menu or delete the config file.\n\n" +
-            "Your IdM-ID (e.g. xy89abcd):";
-
-    private static boolean isValidIDM(String idm) {
-        // disabled
-        if (idm.isEmpty()) {
-            return true;
-        }
-
-        return IDM_PATTERN.matcher(idm).matches();
-    }
-
-    private boolean initializeTelemetry() {
-        // read idm from file
-        try {
-            File file = new File(TELEMETRY_FILE);
-            if (file.exists()) {
-                Scanner scanner = new Scanner(file);
-                String line = scanner.nextLine();
-                if (isValidIDM(line)) {
-                    idm = line;
-                }
-                scanner.close();
-                return true;
-            }
-        } catch (FileNotFoundException e) {
-            // ignore
-        }
-
-        return false;
-    }
-
-    private void createTelemetryPopup(JComponent parent) {
-        String userin = "";
-
-        // ask for idm
-        while (true) {
-            // userin = JOptionPane.showInputDialog(parent, TELEMETRY_STRING, "Telemetry", JOptionPane.QUESTION_MESSAGE);
-            // userin = JOptionPane.showInputDialog(parent, TELEMETRY_STRING, idm);
-            userin = (String) JOptionPane.showInputDialog(parent, TELEMETRY_STRING, "Telemetry", JOptionPane.INFORMATION_MESSAGE, null, null, idm);
-
-            // canceled
-            if (userin == null) {
-                // config file exists? let them go this time
-                File file = new File(TELEMETRY_FILE);
-                if (file.exists()) {
-                    return;
-                }
-
-                // no idm set? ask again
-                continue;
-            }
-
-            // empty input
-            if (userin.isEmpty()) {
-                JOptionPane.showMessageDialog(parent, "Please enter your IdM-ID.");
-                continue;
-            }
-
-            // no telemetry?
-            if (userin.equals("I REFUSE")) {
-                userin = "";
-                int confirmation = JOptionPane.showConfirmDialog(parent, "Are you sure you do not want to help our research?", "Telemetry", JOptionPane.YES_NO_OPTION);
-                if (confirmation == JOptionPane.NO_OPTION) {
-                    continue;
-                }
-            }
-
-            // thank you
-            if (setIDM(userin)) {
-                return;
-            }
-
-            JOptionPane.showMessageDialog(parent, "Invalid IdM. Please try again.");
-        }
-    }
-
-    private boolean setIDM(String input) {
-        if (!isValidIDM(input)) {
-            return false;
-        }
-
-        idm = input;
-        try {
-            // write idm to file
-            PrintWriter writer = new PrintWriter(TELEMETRY_FILE);
-            writer.println(idm);
-            writer.close();
-
-            // make file hidden (because Windows is stupid)
-            Files.setAttribute(Paths.get(TELEMETRY_FILE), "dos:hidden", true);
-        } catch (Exception e) {
-            // ignore
-        }
-        return true;
-    }
-
-    private String getIDM() {
-        return idm;
-    }
-
-    private static class TelemetrySender extends Thread {
-        private LinkedBlockingQueue<String> queue;
-
-        public TelemetrySender(LinkedBlockingQueue<String> queue) {
-            this.queue = queue;
-        }
-
-        @Override
-        public void run(){
-            while (true) {
-                try {
-                    // wait for message
-                    String message = queue.take();
-                    if (message == POISON_PILL) {
-                        return;
-                    }
-
-                    // connect to server
-                    Socket socket = new Socket(DOMAIN, PORT);
-                    OutputStream os = socket.getOutputStream();
-
-                    // send length of encrypted key
-                    os.write(encryptedKey.length >> 8);
-                    os.write(encryptedKey.length);
-                    os.flush();
-
-                    // send encrypted symmetric key
-                    os.write(encryptedKey);
-                    os.flush();
-
-                    // encrypt message
-                    Cipher aesCipher = Cipher.getInstance("AES");
-                    aesCipher.init(Cipher.ENCRYPT_MODE, secretKey);
-                    byte[] encryptedData = aesCipher.doFinal(message.getBytes());
-
-                    // send message
-                    os.write(encryptedData);
-                    os.flush();
-
-                    // clean up
-                    os.close();
-                    socket.close();
-                } catch (Exception e) {
-                    return;
-                }
-            }
-        }
-    }
-
-    private void sendTelemetry(boolean crash) {
-        StringBuilder sb = new StringBuilder();
-
-        // message: <IDM># <filename><newline><source code>
-        // will get saved as:
-        //
-        // Folder <IDM>
-        // |
-        // |- <unix-timestamp>.asm
-        // |    |---------------|
-        // |    | <source code> |
-        // |    |---------------|
-
-        String idm = getIDM();
-
-        // enabled?
-        if (idm == null || idm.isEmpty()) {
-            return;
-        }
-
-        if (crash) {
-            sb.append(CRASH_IDENTIFIER);
-        } else {
-            sb.append(idm);
-        }
-
-        sb.append("# ");
-        sb.append(idm);
-        sb.append(System.lineSeparator());
-
-        // get file name (without path)
-        String filename = currentProgram.getFilename();
-        int index = filename.lastIndexOf(File.separator);
-        if (index != -1) {
-            filename = filename.substring(index + 1);
-            sb.append("# ");
-            sb.append(filename);
-            sb.append(System.lineSeparator());
-        }
-
-        for (String line : currentProgram.getSourceList()) {
-            sb.append(line);
-            sb.append(System.lineSeparator());
-        }
-
-        telemetryQueue.add(sb.toString());
     }
 }
