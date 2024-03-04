@@ -89,6 +89,7 @@ import java.security.PublicKey;
 import java.security.spec.X509EncodedKeySpec;
 import java.time.Instant;
 import java.util.*;
+import java.util.concurrent.Exchanger;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.regex.Pattern;
 
@@ -161,8 +162,9 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
 
     // run stand-alone, with rars as a backend
     // by providing a file (alongside optional arguments for it) as parameters, we can run it instantly
-    // by prepending --nogui, we can turn off the gui to make it even faster, getting a parsable summary on stdout
-    public static void main(String[] args) {
+    // when a second asm file is given, the first one will serve as the "original", with statistics being printed only for the second one
+    // but in addition, the first file is also run and compared to the output of the second one, testing for unchanged semantics TODO: rewrite
+    public static void main(String[] args) throws InterruptedException {
         PipelineVisualizer vapor = new PipelineVisualizer();
 
         // TODO: clean up
@@ -176,59 +178,92 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         vapor.go();
 
         // run program
-        if (args.length > program_arg) {
-            String program_name = args[program_arg];
-            ArrayList<String> parameters = new ArrayList<>(Arrays.asList(Arrays.copyOfRange(args, program_arg+1, args.length)));
-
-            RISCVprogram program = new RISCVprogram();
-            rars.Globals.program = program;
-            ArrayList<RISCVprogram> programsToAssemble;
-            try {
-                ArrayList<String> program_arraylist = new ArrayList<>();
-                program_arraylist.add(program_name);
-                programsToAssemble = program.prepareFilesForAssembly(program_arraylist, program_name, null);
-            } catch (AssemblyException pe) {
-                return;
+        if (args.length > 0) {
+            SimulatorNotice firstNotice = vapor.runProgram(args[0]);
+            if (firstNotice.getReason() != Simulator.Reason.NORMAL_TERMINATION) {
+                System.err.println("Warning: abnormal execution");
             }
-            try {
-                program.assemble(programsToAssemble, Globals.getSettings().getBooleanSetting(Settings.Bool.EXTENDED_ASSEMBLER_ENABLED),
-                        Globals.getSettings().getBooleanSetting(Settings.Bool.WARNINGS_ARE_ERRORS));
-            } catch (AssemblyException pe) {
-                return;
+
+            if (args.length > 1) {
+                // save status for comparison
+                Register[] original = RegisterFile.getRegisters(); // TODO: deep copy
+                // TODO floating and control registers?
+
+                SimulatorNotice secondNotice = vapor.runProgram(args[1]);
+                Register[] modified = RegisterFile.getRegisters();
+
+                // compare
+                if (firstNotice.getReason() != secondNotice.getReason()) {
+                    System.err.printf("%s: reason differed%n", args[1]);
+                    System.exit(1);
+                }
+                for (int i = 0; i < original.length; i++) {
+                    if (original[i].getNumber() != modified[i].getNumber()) {
+                        System.err.printf("%s: %s differed ~ %d <-> %d",
+                            args[1], original[i].getName(), original[i].getNumber(), modified[i].getNumber());
+                        System.exit(1);
+                    }
+                }
             }
-            RegisterFile.resetRegisters();
-            FloatingPointRegisterFile.resetRegisters();
-            ControlAndStatusRegisterFile.resetRegisters();
-            InterruptController.reset();
-            vapor.addAsObserver();
-            // vapor.observing = true; // seems like this doesn't impact results
 
-            final Observer stopListener =
-                    new Observer() {
-                        public void update(Observable o, Object simulator) {
-                            SimulatorNotice notice = ((SimulatorNotice) simulator);
-                            if (notice.getAction() != SimulatorNotice.SIMULATOR_STOP) return;
-                            vapor.deleteAsObserver();
-                            // vapor.observing = false;
-                            o.deleteObserver(this);
-
-                            if (notice.getReason() != Simulator.Reason.NORMAL_TERMINATION) {
-                                System.err.println("something went wrong");
-                                System.exit(1);
-                            }
-
-                            String speedupInfo = vapor.speedup.getText();
-                            speedupInfo = speedupInfo.replace("<html>", "");
-                            speedupInfo = speedupInfo.replace("</html>", "");
-                            speedupInfo = speedupInfo.replace("<br/>", "\n");
-                            System.out.println(speedupInfo);
-                            // TODO: number of hazards, check unchanged semantics, ...
-                            System.exit(0); // yeet
-                        }
-                    };
-            Simulator.getInstance().addObserver(stopListener);
-            program.startSimulation(-1, null);
+            vapor.printStatistics();
+            System.exit(0);
         }
+    }
+
+    private SimulatorNotice runProgram(String path) throws InterruptedException {
+        ArrayList<String> parameters = new ArrayList<>();
+
+        RISCVprogram program = new RISCVprogram();
+        rars.Globals.program = program;
+        ArrayList<RISCVprogram> programsToAssemble;
+        try {
+            ArrayList<String> program_arraylist = new ArrayList<>();
+            program_arraylist.add(path);
+            programsToAssemble = program.prepareFilesForAssembly(program_arraylist, path, null);
+        } catch (AssemblyException pe) {
+            return null;
+        }
+        try {
+            program.assemble(programsToAssemble, Globals.getSettings().getBooleanSetting(Settings.Bool.EXTENDED_ASSEMBLER_ENABLED),
+                    Globals.getSettings().getBooleanSetting(Settings.Bool.WARNINGS_ARE_ERRORS));
+        } catch (AssemblyException pe) {
+            return null;
+        }
+        RegisterFile.resetRegisters();
+        FloatingPointRegisterFile.resetRegisters();
+        ControlAndStatusRegisterFile.resetRegisters();
+        InterruptController.reset();
+        addAsObserver();
+        // vapor.observing = true; // seems like this doesn't impact results
+
+        Exchanger<SimulatorNotice> finishNoticeExchanger = new Exchanger<>();
+        final Observer stopListener =
+                new Observer() {
+                    public void update(Observable o, Object simulator) {
+                        SimulatorNotice notice = ((SimulatorNotice) simulator);
+                        if (notice.getAction() != SimulatorNotice.SIMULATOR_STOP) return;
+                        deleteAsObserver();
+                        // vapor.observing = false;
+                        o.deleteObserver(this);
+
+                        try {
+                            finishNoticeExchanger.exchange(notice);
+                        } catch (InterruptedException ignored) {
+                        }
+                    }
+                };
+        Simulator.getInstance().addObserver(stopListener);
+        program.startSimulation(-1, null);
+        return finishNoticeExchanger.exchange(null);
+    }
+
+    public void printStatistics() {
+        String speedupInfo = speedup.getText();
+        speedupInfo = speedupInfo.replace("<html>", "");
+        speedupInfo = speedupInfo.replace("</html>", "");
+        speedupInfo = speedupInfo.replace("<br/>", "\n");
+        System.out.println(speedupInfo);
     }
 
     @Override
@@ -264,6 +299,7 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         pipeline.setCellSelectionEnabled(true);
         pipeline.setFillsViewportHeight(true);
         pipeline.setDefaultEditor(Object.class, null);
+        // TODO: exception handler for eventdispatchthread
 
         // custom renderer for coloring cells
         pipeline.setDefaultRenderer(Object.class, new DefaultTableCellRenderer() {
