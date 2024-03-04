@@ -169,12 +169,6 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
 
         // TODO: clean up
 
-        int program_arg = 0; // where the name of the executed program should start
-        if (args.length > 0 && args[0].equals("--nogui")) {
-            vapor.gui_enabled = false; // TODO: implement
-            program_arg++;
-        }
-
         vapor.go();
 
         // run program
@@ -186,21 +180,22 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
 
             if (args.length > 1) {
                 // save status for comparison
-                Register[] original = RegisterFile.getRegisters(); // TODO: deep copy
+                java.util.List<Long> original = Arrays.stream(RegisterFile.getRegisters()).map(x -> x.getValueNoNotify()).toList();
                 // TODO floating and control registers?
+                // TODO compare stdout
 
                 SimulatorNotice secondNotice = vapor.runProgram(args[1]);
                 Register[] modified = RegisterFile.getRegisters();
 
                 // compare
                 if (firstNotice.getReason() != secondNotice.getReason()) {
-                    System.err.printf("%s: reason differed%n", args[1]);
+                    System.err.printf("%s: reason differed: %s%n", args[1], secondNotice.getReason().name());
                     System.exit(1);
                 }
-                for (int i = 0; i < original.length; i++) {
-                    if (original[i].getNumber() != modified[i].getNumber()) {
-                        System.err.printf("%s: %s differed ~ %d <-> %d",
-                            args[1], original[i].getName(), original[i].getNumber(), modified[i].getNumber());
+                for (int i = 0; i < original.size(); i++) {
+                    if (original.get(i) != modified[i].getValue()) {
+                        System.err.printf("%s: %s differed ~ %d <-> %d%n",
+                            args[1], modified[i].getName(), original.get(i), modified[i].getValueNoNotify());
                         System.exit(1);
                     }
                 }
@@ -443,7 +438,7 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
             StyleConstants.setBackground(bothHazard, Color.GREEN);
             doc.setCharacterAttributes(helpContent.indexOf("GREEN"), 19, bothHazard, false);
 
-            // measuring ranges
+            // measuring ranges colored
             SimpleAttributeSet measureRange = new SimpleAttributeSet();
             StyleConstants.setBold(measureRange, true);
             StyleConstants.setBackground(measureRange, Color.DARK_GRAY);
