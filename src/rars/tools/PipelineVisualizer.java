@@ -99,7 +99,6 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
     // TODO: REFACTOR!!!
     // TODO: make things static and final where possible
 
-    // TODO: standalone application
     // TODO: other pipeline types, branch prediction, forwarding
 
     // FETCH, DECODE, OPERAND FETCH, EXECUTE, WRITE BACK
@@ -108,10 +107,10 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
     // readable enum
     private static class STAGE {
         public static final int IF = 0;
-        public static final int IDOF = 1;
-        public static final int EX = 2;
-        public static final int MEM = 3;
-        public static final int WB = 4;
+        public static final int IDOF = IF + 1;
+        public static final int EX = IDOF + 1;
+        public static final int MEM = EX + 1;
+        public static final int WB = MEM + 1;
     }
 
     private static final int CONTROL_HAZARD_DETECT = STAGE.IDOF;
@@ -122,9 +121,9 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
     private static final String CONTROL_HAZARD_LABEL = " \u2BAB"; // arrow
     private static final String DATA_HAZARD_LABEL = " \u26A0\uFE0F"; // warning sign
 
-    private static final String NAME = "VAPOR";
+    private static final String NAME = "Pipeline Visualizer";
     private static final String VERSION = "1.0 (Johannes Dittrich)";
-    private static final String HEADING = "Visualizer for advanced pipelining on RARS";
+    private static final String HEADING = "VAPOR - Visualizer for advanced pipelining on RARS";
 
     private boolean gui_enabled = true;
     private JPanel panel;
