@@ -151,6 +151,11 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
     private Stack<Integer> backstepStack = new Stack<>();
     private Stack<ProgramStatement[]> backstepPipelineStack = new Stack<>();
 
+    // statistics for standalone app
+    // WARNING: does not play nice with backstep, but not necessary since it's only used for non-gui standalone app
+    private int dataHazardStatistics;
+    private int controlHazardStatistics;
+
     public PipelineVisualizer(String title, String heading) {
         super(title, heading);
     }
@@ -163,7 +168,11 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
     // by providing a file (alongside optional arguments for it) as parameters, we can run it instantly
     // when a second asm file is given, the first one will serve as the "original", with statistics being printed only for the second one
     // but in addition, the first file is also run and compared to the output of the second one, testing for unchanged semantics TODO: rewrite
-    public static void main(String[] args) throws InterruptedException {
+    public static void main(String[] args) {
+        SwingUtilities.invokeLater(() -> standalone(args));
+    }
+
+    private static void standalone(String[] args) {
         PipelineVisualizer vapor = new PipelineVisualizer();
 
         // TODO: clean up
@@ -173,9 +182,15 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         // run program
         if (args.length > 0) {
             SimulatorNotice firstNotice = vapor.runProgram(args[0]);
-            if (firstNotice.getReason() != Simulator.Reason.NORMAL_TERMINATION) {
-                System.err.println("Warning: abnormal execution");
-            }
+
+            // now that's some enterprise level coding right here
+            // do this to give painter time to relax, otherwise a few eventqueue exceptions will occur
+            // try {
+            //     Thread.sleep(Math.min(10, vapor.model.getRowCount()));
+            // } catch (InterruptedException ignored) { }
+            // if (firstNotice.getReason() != Simulator.Reason.NORMAL_TERMINATION) {
+            //     System.err.printf("Warning: abnormal execution for file %s%n", args[0]);
+            // }
 
             if (args.length > 1) {
                 // save status for comparison
@@ -188,12 +203,12 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
 
                 // compare
                 if (firstNotice.getReason() != secondNotice.getReason()) {
-                    System.err.printf("%s: reason differed: %s%n", args[1], secondNotice.getReason().name());
+                    System.out.printf("%s: reason differed: %s%n", args[1], secondNotice.getReason().name());
                     System.exit(1);
                 }
                 for (int i = 0; i < original.size(); i++) {
                     if (original.get(i) != modified[i].getValue()) {
-                        System.err.printf("%s: %s differed ~ %d <-> %d%n",
+                        System.out.printf("%s: %s differed ~ %d <-> %d%n",
                             args[1], modified[i].getName(), original.get(i), modified[i].getValueNoNotify());
                         System.exit(1);
                     }
@@ -205,7 +220,7 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         }
     }
 
-    private SimulatorNotice runProgram(String path) throws InterruptedException {
+    private SimulatorNotice runProgram(String path) {
         ArrayList<String> parameters = new ArrayList<>();
 
         RISCVprogram program = new RISCVprogram();
@@ -249,7 +264,11 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
                 };
         Simulator.getInstance().addObserver(stopListener);
         program.startSimulation(-1, null);
-        return finishNoticeExchanger.exchange(null);
+        SimulatorNotice ret = null;
+        try {
+            ret = finishNoticeExchanger.exchange(null);
+        } catch (InterruptedException ignored) { }
+        return ret;
     }
 
     public void printStatistics() {
@@ -257,7 +276,10 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         speedupInfo = speedupInfo.replace("<html>", "");
         speedupInfo = speedupInfo.replace("</html>", "");
         speedupInfo = speedupInfo.replace("<br/>", "\n");
+        System.out.println("Cycles taken: " + model.getRowCount());
         System.out.println(speedupInfo);
+        System.out.println("Data hazards: " + dataHazardStatistics);
+        System.out.println("Control hazards: " + controlHazardStatistics);
     }
 
     @Override
@@ -293,7 +315,6 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         pipeline.setCellSelectionEnabled(true);
         pipeline.setFillsViewportHeight(true);
         pipeline.setDefaultEditor(Object.class, null);
-        // TODO: exception handler for eventdispatchthread
 
         // custom renderer for coloring cells
         pipeline.setDefaultRenderer(Object.class, new DefaultTableCellRenderer() {
@@ -660,6 +681,14 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         ProgramStatement next = nextInstruction();
         Set<Integer> controlHazard = hasControlHazard();
         Set<Integer> dataHazard = hasDataHazard();
+
+        // statistics
+        if (!controlHazard.isEmpty()) {
+            controlHazardStatistics++;
+        }
+        if (!dataHazard.isEmpty()) {
+            dataHazardStatistics++;
+        }
 
         // MEM -> WB
         currentPipeline[STAGE.WB] = currentPipeline[STAGE.MEM];
@@ -1060,6 +1089,7 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
     }
 
     // TODO: make info easily accessible from outside
+    // TODO: maybe give user statistic about number of hazards as well?
     private void updateSpeedupText() {
         // assume 1 cycle per stage with pipeline, 5 cycles per stage without (i e all stalls)
 
