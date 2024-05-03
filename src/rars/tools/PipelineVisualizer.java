@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2023, Johannes Dittrich, Friedrich Alexander University Erlangen, Germany
+Copyright (c) 2024, Johannes Dittrich, Friedrich Alexander University Erlangen, Germany
 
 Developed by Johannes Dittrich (johannes.dittrich(@)fau.de)
 
@@ -26,83 +26,21 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 package rars.tools;
 
-import javax.crypto.Cipher;
-import javax.crypto.KeyGenerator;
-import javax.crypto.SecretKey;
-
-// TODO: optimize imports
-
 import javax.swing.*;
-import javax.swing.table.DefaultTableCellRenderer;
-import javax.swing.table.DefaultTableModel;
-import javax.swing.table.TableModel;
-import javax.swing.text.BadLocationException;
-import javax.swing.text.SimpleAttributeSet;
-import javax.swing.text.StyleConstants;
-import javax.swing.text.StyledDocument;
-
-import rars.AssemblyException;
-import rars.Globals;
-import rars.ProgramStatement;
-import rars.RISCVprogram;
-import rars.Settings;
-import rars.SimulationException;
-import rars.api.Program;
-import rars.assembler.SourceLine;
-import rars.riscv.BasicInstruction;
-import rars.riscv.Instruction;
-import rars.riscv.hardware.*;
-import rars.riscv.instructions.AUIPC;
-import rars.riscv.instructions.Arithmetic;
-import rars.riscv.instructions.Branch;
-import rars.riscv.instructions.ECALL;
-import rars.riscv.instructions.Floating;
-import rars.riscv.instructions.FusedDouble;
-import rars.riscv.instructions.FusedFloat;
-import rars.riscv.instructions.ImmediateInstruction;
-import rars.riscv.instructions.JAL;
-import rars.riscv.instructions.JALR;
-import rars.riscv.instructions.LUI;
-import rars.riscv.instructions.Load;
-import rars.riscv.instructions.SLLI;
-import rars.riscv.instructions.SRAI;
-import rars.riscv.instructions.SRLI;
-import rars.riscv.instructions.Store;
-import rars.simulator.BackStepper;
-import rars.simulator.Simulator;
-import rars.simulator.SimulatorNotice;
-
 import java.awt.*;
-import java.awt.event.ComponentAdapter;
-import java.awt.event.ComponentEvent;
-import java.io.File;
-import java.io.FileNotFoundException;
-import java.io.IOException;
-import java.io.OutputStream;
-import java.io.PrintWriter;
-import java.net.Socket;
-import java.nio.file.Files;
-import java.nio.file.Paths;
-import java.security.KeyFactory;
-import java.security.NoSuchAlgorithmException;
-import java.security.PublicKey;
-import java.security.spec.X509EncodedKeySpec;
-import java.time.Instant;
 import java.util.*;
-import java.util.concurrent.Exchanger;
-import java.util.concurrent.LinkedBlockingQueue;
-import java.util.regex.Pattern;
+import java.util.concurrent.*;
+import rars.*;
+import rars.assembler.*;
+import rars.riscv.*;
+import rars.riscv.hardware.*;
+import rars.riscv.instructions.*;
+import rars.simulator.*;
 
-// TODO: javadoc
 
 public class PipelineVisualizer extends AbstractToolAndApplication {
-    // TODO: REFACTOR!!!
-    // TODO: make things static and final where possible
-
-    // TODO: other pipeline types, branch prediction, forwarding
-
     // FETCH, DECODE, OPERAND FETCH, EXECUTE, WRITE BACK
-    private static final int STAGES = 5; // TODO: utilize this generally?
+    private static final int STAGES = 5;
 
     // readable enum
     private static class STAGE {
@@ -125,13 +63,7 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
     private static final String VERSION = "1.0 (Johannes Dittrich)";
     private static final String HEADING = "VAPOR - Visualizer for advanced pipelining on RARS";
 
-    private boolean gui_enabled = true;
-    private JPanel panel;
-    private JTable pipeline;
-    private DefaultTableModel model;
-    private JLabel speedup;
-    private JFrame helpFrame;
-    private JLabel quickstart;
+    private PipelineVisualizerGUI gui;
 
     // protected int executedInstructions = 0;
     // protected int cyclesTaken = 0;
@@ -143,9 +75,6 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
     private Set<Integer> measuredLines = new HashSet<>();
     private static final String MEASURE_START = "PIPELINE_MEASURE_START";
     private static final String MEASURE_END = "PIPELINE_MEASURE_END";
-
-    // row and column mappings for cell coloring
-    private ArrayList<Map<Integer, Color>> colors = new ArrayList<>(STAGES+1);
 
     // stack for backstepping
     private Stack<Integer> backstepStack = new Stack<>();
@@ -166,8 +95,8 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
 
     // run stand-alone, with rars as a backend
     // by providing a file (alongside optional arguments for it) as parameters, we can run it instantly
-    // when a second asm file is given, the first one will serve as the "original", with statistics being printed only for the second one
-    // but in addition, the first file is also run and compared to the output of the second one, testing for unchanged semantics TODO: rewrite
+    // when a second asm file is given, the first one will serve as the "reference", with statistics being printed only for the second one
+    // but in addition, the first file is also run and compared to the output of the second one, testing for unchanged semantics
     public static void main(String[] args) {
         SwingUtilities.invokeLater(() -> standalone(args));
     }
@@ -175,28 +104,15 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
     private static void standalone(String[] args) {
         PipelineVisualizer vapor = new PipelineVisualizer();
 
-        // TODO: clean up
-
         vapor.go();
 
         // run program
         if (args.length > 0) {
             SimulatorNotice firstNotice = vapor.runProgram(args[0]);
 
-            // now that's some enterprise level coding right here
-            // do this to give painter time to relax, otherwise a few eventqueue exceptions will occur
-            // try {
-            //     Thread.sleep(Math.min(10, vapor.model.getRowCount()));
-            // } catch (InterruptedException ignored) { }
-            // if (firstNotice.getReason() != Simulator.Reason.NORMAL_TERMINATION) {
-            //     System.err.printf("Warning: abnormal execution for file %s%n", args[0]);
-            // }
-
             if (args.length > 1) {
                 // save status for comparison
                 java.util.List<Long> original = Arrays.stream(RegisterFile.getRegisters()).map(x -> x.getValueNoNotify()).toList();
-                // TODO floating and control registers?
-                // TODO compare stdout
 
                 SimulatorNotice secondNotice = vapor.runProgram(args[1]);
                 Register[] modified = RegisterFile.getRegisters();
@@ -272,12 +188,10 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
     }
 
     public void printStatistics() {
-        String speedupInfo = speedup.getText();
-        speedupInfo = speedupInfo.replace("<html>", "");
-        speedupInfo = speedupInfo.replace("</html>", "");
-        speedupInfo = speedupInfo.replace("<br/>", "\n");
-        System.out.println("Cycles taken: " + model.getRowCount());
-        System.out.println(speedupInfo);
+        System.out.println("Cycles taken: " + totalCyclesTaken());
+        System.out.println("Instructions executed: " + instructionsExecuted());
+        System.out.println("Speedup: " + speedup());
+        System.out.println("Speedup without hazards: " + speedupWithoutHazards());
         System.out.println("Data hazards: " + dataHazardStatistics);
         System.out.println("Control hazards: " + controlHazardStatistics);
     }
@@ -288,225 +202,29 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
     }
 
     @Override
+    protected void initializePreGUI() {
+        gui = new PipelineVisualizerGUI(STAGES);
+        // make our life a bit easier, can probably be abstracted away
+    }
+
+    @Override
     protected JComponent buildMainDisplayArea() {
-        for (int i = 0; i < STAGES+1; i++) {
-            colors.add(new HashMap<>());
-        }
-
-        panel = new JPanel(new BorderLayout());
-
-        quickstart = new JLabel("<html>To get started, connect this tool to your program, then run your program as normal.<br/>Click the help button below for further information.</html>");
-        panel.add(quickstart, BorderLayout.NORTH);
-
-        model = new DefaultTableModel();
-        model.addColumn("CYCLE");
-        model.addColumn("IF");
-        model.addColumn("ID/OF");
-        model.addColumn("EX");
-        model.addColumn("MEM");
-        model.addColumn("WB");
-
-        // i have no idea what half of these options do
-        pipeline = new JTable(model);
-        pipeline.setShowGrid(true);
-        pipeline.setGridColor(Color.BLACK);
-        pipeline.setRowHeight(20);
-        pipeline.setRowSelectionAllowed(false);
-        pipeline.setCellSelectionEnabled(true);
-        pipeline.setFillsViewportHeight(true);
-        pipeline.setDefaultEditor(Object.class, null);
-
-        // custom renderer for coloring cells
-        pipeline.setDefaultRenderer(Object.class, new DefaultTableCellRenderer() {
-            @Override
-            public Component getTableCellRendererComponent(JTable table, Object value, boolean isSelected, boolean hasFocus, int row, int column) {
-                Component c = super.getTableCellRendererComponent(table, value, isSelected, hasFocus, row, column);
-
-                Color color = colors.get(column).get(row);
-
-                if (color != null) {
-                    c.setBackground(color);
-
-                    // this has issues with green
-                    // calculate (weighted) luminance
-                    // int luminance = (3*color.getRed() + 4*color.getGreen() + color.getBlue()) >> 3;
-
-                    // if color is dark, make text white
-                    if (Math.max(color.getRed(), Math.max(color.getGreen(), color.getBlue())) < 128) {
-                        c.setForeground(Color.WHITE);
-                    } else {
-                        c.setForeground(Color.BLACK);
-                    }
-                } else {
-                    c.setBackground(Color.WHITE);
-                    c.setForeground(Color.BLACK);
-                }
-
-                return c;
-            }
-        });
-
-        // scroll to bottom
-        pipeline.addComponentListener(new ComponentAdapter() {
-            public void componentResized(ComponentEvent e) {
-                int lastIndex =pipeline.getCellRect(pipeline.getRowCount()-1, 0, false).y;
-                pipeline.changeSelection(lastIndex, 0,false,false);
-            }
-        });
-
-        JScrollPane scrollPane = new JScrollPane(pipeline);
-        panel.add(scrollPane, BorderLayout.CENTER);
-
-        JPanel bottomPanel = new JPanel(new BorderLayout());
-
-        // TODO: make this fancy?
-        speedup = new JLabel();
-        updateSpeedupText();
-        bottomPanel.add(speedup, BorderLayout.WEST);
-        panel.add(bottomPanel, BorderLayout.SOUTH);
-
-        return panel;
+        return gui.buildMainDisplayArea();
     }
 
     @Override
     protected JComponent getHelpComponent() {
-        String helpContent =
-            "VAPOR\n\n" +
-            "This tool visualizes the pipeline of a RISC-V processor.\n" +
-            "It is modeled after the default 5-stage pipeline with the following stages:\n" +
-            "IF: Instruction Fetch\n" +
-            "ID/OF: Instruction Decode and Operand Fetch\n" +
-            "EX: Execute\n" +
-            "MEM: Memory Access\n" +
-            "WB: Write Back\n\n" +
-            "To use, connect the simulator to the program via the 'Connect to Program' button, then, you can step through the program as usual.\n" +
-            "The pipeline and speedup will be updated automatically.\n" +
-            "Even backstepping is supported, although due to a faulty implementation on the rars-side, one has to be careful with branches.\n\n" +
-            "Each instruction in the pipeline corresponds to a non-pseudo instruction.\n" +
-            "The number after each instruction shows the line in the original source code\n\n" +
-            "The pipeline is colored according to the following scheme:\n" +
-            "YELLOW + " + CONTROL_HAZARD_LABEL + ": control hazard\n" +
-            "CYAN + " + DATA_HAZARD_LABEL + ": data hazard\n" +
-            "GREEN + both labels: both control and data hazard\n\n" +
-            "One can also instruct the simulator to only measure within a certain range of instructions.\n" +
-            "To do this, add lines containing the following identifiers to the source code (for example in a comment):\n" +
-            MEASURE_START + ": start measuring from this instruction\n" +
-            MEASURE_END + ": stop measuring after this instruction\n" +
-            "The identifiers are case-sensitive and include the lines they are on in their range.\n" +
-            "During execution, when the start of such a region is reached, the cycle will be highlighted in DARK GRAY.";
-
-        // help frame
-        helpFrame = new JFrame("Help");
-        helpFrame.setDefaultCloseOperation(JFrame.HIDE_ON_CLOSE);
-        helpFrame.setLocationRelativeTo(null);
-
-        // close button
-        JButton closeButton = new JButton("Close");
-        closeButton.addActionListener(e -> {
-            helpFrame.setVisible(false);
-        });
-
-        // text pane
-        JTextPane helpTextPane = new JTextPane();
-        helpTextPane.setEditable(false);
-
-        // format text
-        StyledDocument doc = helpTextPane.getStyledDocument();
-        try {
-            doc.insertString(0, helpContent, null);
-
-            // VAPOR title
-            SimpleAttributeSet title = new SimpleAttributeSet();
-            StyleConstants.setFontSize(title, 20);
-            StyleConstants.setBold(title, true);
-            StyleConstants.setAlignment(title, StyleConstants.ALIGN_CENTER);
-            doc.setParagraphAttributes(0, 5, title, false);
-
-            // pipeline stages bold
-            SimpleAttributeSet bold = new SimpleAttributeSet();
-            StyleConstants.setBold(bold, true);
-            doc.setCharacterAttributes(helpContent.indexOf("IF"), 3, bold, false);
-            doc.setCharacterAttributes(helpContent.indexOf("ID/OF"), 6, bold, false);
-            doc.setCharacterAttributes(helpContent.indexOf("EX"), 3, bold, false);
-            doc.setCharacterAttributes(helpContent.indexOf("MEM"), 4, bold, false);
-            doc.setCharacterAttributes(helpContent.indexOf("WB"), 3, bold, false);
-
-            // connect to program bold
-            doc.setCharacterAttributes(helpContent.indexOf("Connect to Program"), 19, bold, false);
-
-            // measure start/end bold
-            doc.setCharacterAttributes(helpContent.indexOf(MEASURE_START), MEASURE_START.length(), bold, false);
-            doc.setCharacterAttributes(helpContent.indexOf(MEASURE_END), MEASURE_END.length(), bold, false);
-
-            // hazard labels bold and colored
-
-            // control hazard
-            SimpleAttributeSet controlHazard = new SimpleAttributeSet();
-            StyleConstants.setBold(controlHazard, true);
-            StyleConstants.setBackground(controlHazard, Color.YELLOW);
-            doc.setCharacterAttributes(helpContent.indexOf("YELLOW"), 11, controlHazard, false);
-
-            // data hazard
-            SimpleAttributeSet dataHazard = new SimpleAttributeSet();
-            StyleConstants.setBold(dataHazard, true);
-            StyleConstants.setBackground(dataHazard, Color.CYAN);
-            doc.setCharacterAttributes(helpContent.indexOf("CYAN"), 9, dataHazard, false);
-
-            // both hazards
-            SimpleAttributeSet bothHazard = new SimpleAttributeSet();
-            StyleConstants.setBold(bothHazard, true);
-            StyleConstants.setBackground(bothHazard, Color.GREEN);
-            doc.setCharacterAttributes(helpContent.indexOf("GREEN"), 19, bothHazard, false);
-
-            // measuring ranges colored
-            SimpleAttributeSet measureRange = new SimpleAttributeSet();
-            StyleConstants.setBold(measureRange, true);
-            StyleConstants.setBackground(measureRange, Color.DARK_GRAY);
-            StyleConstants.setForeground(measureRange, Color.WHITE);
-            doc.setCharacterAttributes(helpContent.indexOf("DARK GRAY"), 9, measureRange, false);
-        } catch (BadLocationException e1) {
-            e1.printStackTrace();
-        }
-
-        // helpTextPane.setContentType("text/html");
-        // helpTextPane.setText(helpContentLabel);
-
-        // scroll pane
-        JScrollPane scrollPane = new JScrollPane(helpTextPane);
-        scrollPane.setPreferredSize(new Dimension(600, 400));
-        SwingUtilities.invokeLater(() -> {
-            scrollPane.getVerticalScrollBar().setValue(0);
-        });
-
-        // help panel
-        JPanel helpPanel = new JPanel(new BorderLayout());
-        helpPanel.add(scrollPane, BorderLayout.CENTER);
-
-        // south panel
-        JPanel southPanel = new JPanel(new BorderLayout());
-        southPanel.add(closeButton, BorderLayout.EAST);
-        helpPanel.add(southPanel, BorderLayout.SOUTH);
-
-        // help frame
-        helpFrame.add(helpPanel);
-        helpFrame.pack();
-
-        // generate help button for parent
-        JButton helpButton = new JButton("Help");
-        helpButton.addActionListener(e -> {
-            helpFrame.setVisible(true);
-        });
-        return helpButton;
+        return gui.getHelpComponent();
     }
 
     @Override
     protected void reset() {
-        model.setRowCount(0);
+        gui.getModel().setRowCount(0);
         // lastAddress = -1;
         for (int i = 0; i < STAGES; i++) {
             currentPipeline[i] = null;
         }
-        for (Map<Integer, Color> map : colors) {
+        for (Map<Integer, Color> map : gui.getColors()) {
             map.clear();
         }
         backstepStack.clear();
@@ -526,18 +244,10 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
     public void update(Observable resource, Object accessNotice) {
         if (accessNotice instanceof AccessNotice) {
             super.update(resource, accessNotice);
-        }
-        // else if (accessNotice instanceof SimulatorNotice) {
-        //     processSimulatorUpdate(resource, (SimulatorNotice) accessNotice);
-        // }
-        else if (accessNotice instanceof BackStepper) {
+        } else if (accessNotice instanceof BackStepper) {
             processBackStep();
         }
     }
-
-    // protected void processSimulatorUpdate(Observable resource, SimulatorNotice notice) {
-    //     System.out.println(notice.toString());
-    // }
 
     @Override
     protected void processRISCVUpdate(Observable resource, AccessNotice notice) {
@@ -551,13 +261,6 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         if (!(notice instanceof MemoryAccessNotice)) return;
 
         MemoryAccessNotice memNotice = (MemoryAccessNotice) notice;
-
-        // stolen from Felipe Lessa's instruction counter
-        // TODO: even needed? seems like no
-        // int a = memNotice.getAddress();
-        // if (a == lastAddress)
-        //     return;
-        // lastAddress = a;
 
         ProgramStatement stmt = null;
         try {
@@ -620,7 +323,7 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
             }
 
             // add color marker to table
-            colors.get(0).put(model.getRowCount(), Color.DARK_GRAY);
+            gui.getColors().get(0).put(gui.getModel().getRowCount(), Color.DARK_GRAY);
 
             return;
         }
@@ -655,7 +358,7 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         // executedInstructions++;
 
         if (taken == failsafe) {
-            JOptionPane.showMessageDialog(panel, "VAPOR: could not predict pipeline", "VAPOR", JOptionPane.ERROR_MESSAGE);
+            JOptionPane.showMessageDialog(gui.getPanel(), "VAPOR: could not predict pipeline", "VAPOR", JOptionPane.ERROR_MESSAGE);
             reset();
             connectButton.doClick();
             System.err.println("VAPOR: could not predict pipeline");
@@ -676,7 +379,6 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         }
 
         // try to advance pipeline
-        // TODO: change to generic for-loop
 
         ProgramStatement next = nextInstruction();
         Set<Integer> controlHazard = hasControlHazard();
@@ -700,7 +402,7 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         // data hazard
         if (dataHazard.contains(STAGE.IDOF)) { // stall
             currentPipeline[STAGE.EX] = null;
-            // flush and stall cuz control hazard resolving, TODO: clean this up
+            // flush and stall cuz control hazard resolving
             if (controlHazard.contains(CONTROL_HAZARD_RESOLVE)) {
                 currentPipeline[STAGE.IDOF] = null;
                 currentPipeline[STAGE.IF] = next;
@@ -753,18 +455,14 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
             return null;
         }
 
-        // TODO: clean up
-
         if (stmt.getInstruction() instanceof Branch) {
             Branch b = (Branch) stmt.getInstruction();
             if (b.willBranch(stmt)) {
                 // branch taken
-                // System.out.println(Arrays.toString(stmt.getOperands()));
                 int offset = stmt.getOperands()[2]; // TODO: is this generic?
                 try {
                     return Memory.getInstance().getStatementNoNotify(stmt.getAddress() + offset);
                 } catch (AddressErrorException e) {
-                    // TODO Auto-generated catch block
                     e.printStackTrace();
                 }
             }
@@ -773,13 +471,9 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         if (stmt.getInstruction() instanceof JAL) {
             // JAL b = (JAL) stmt.getInstruction();
             int offset = stmt.getOperands()[1];
-            // System.out.println(Arrays.toString(stmt.getOperands()));
-            // System.out.printf("JAL %x\n", offset);
-            // System.out.println(stmt.getAddress());
             try {
                 return Memory.getInstance().getStatementNoNotify(stmt.getAddress() + offset);
             } catch (AddressErrorException e) {
-                // TODO Auto-generated catch block
                 e.printStackTrace();
             }
         }
@@ -790,7 +484,6 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
             try {
                 return Memory.getInstance().getStatementNoNotify(newaddr);
             } catch (AddressErrorException e) {
-                // TODO Auto-generated catch block
                 e.printStackTrace();
             }
         }
@@ -801,10 +494,9 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
     private ProgramStatement instructionAfter(ProgramStatement current) {
         ProgramStatement nextInMem = null;
         try {
-            // TODO: walk over non-instructions?
+            // assume code segment only includes actual instructions
             nextInMem = Memory.getInstance().getStatementNoNotify(current.getAddress() + Instruction.INSTRUCTION_LENGTH);
         } catch (AddressErrorException e) {
-            // TODO Auto-generated catch block
             e.printStackTrace();
         }
         return nextInMem;
@@ -875,8 +567,7 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         return collisions;
     }
 
-    // TODO: refactor this out
-
+    // probably better to use polymorphism with the operands themselves
     private int[] getReadingRegisters(ProgramStatement stmt) {
         if (stmt == null) {
             return new int[] {};
@@ -934,7 +625,7 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
             return new int[] { operands[1] };
         }
 
-        // TODO: what to do with ecalls?
+        // TODO: ecalls currently not handled properly
         if (inst instanceof ECALL) {
             return new int[] { };
         }
@@ -1001,7 +692,7 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         }
 
 
-        // TODO: what to do with ecalls?
+        // TODO: ecalls currently not handled properly
         if (inst instanceof ECALL) {
             return new int[] { };
         }
@@ -1019,10 +710,10 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
 
         // delete rows and color
         for (int i = 0; i < count; i++) {
-            int rows = model.getRowCount();
+            int rows = gui.getModel().getRowCount();
 
-            model.removeRow(rows-1);
-            colors.forEach((map) -> {
+            gui.getModel().removeRow(rows-1);
+            gui.getColors().forEach((map) -> {
                 map.remove(rows-1);
             });
         }
@@ -1037,7 +728,7 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
     }
 
     private void updateTable() {
-        int rows = model.getRowCount();
+        int rows = gui.getModel().getRowCount();
         Set<Integer> controlHazards = hasControlHazard();
         Set<Integer> dataHazards = hasDataHazard();
 
@@ -1056,9 +747,11 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
         }
 
         // write pipeline to table
-        model.addRow(newrow);
+        gui.getModel().addRow(newrow);
 
         // add color
+
+        ArrayList<Map<Integer, Color>> colors = gui.getColors();
 
         // color for cycle column
         colors.get(0).putIfAbsent(rows, Color.LIGHT_GRAY);
@@ -1081,37 +774,25 @@ public class PipelineVisualizer extends AbstractToolAndApplication {
                 colors.get(stage).put(rows, Color.CYAN);
             }
         }
-
-        // still uncertain fetch (from control hazard - limitation of simulation)
-        // if (isBranchInstruction(currentPipeline[STAGE.WB])) {
-        //     colors.get(STAGE.IF).put(row, Color.LIGHT_GRAY);
-        // }
     }
 
-    // TODO: make info easily accessible from outside
-    // TODO: maybe give user statistic about number of hazards as well?
+    private int instructionsExecuted() {
+        return backstepStack.size();
+    }
+
+    private int totalCyclesTaken() {
+        return Math.max(1, gui.getModel().getRowCount());
+    }
+
+    private double speedup() {
+        return (double) STAGES * instructionsExecuted() / totalCyclesTaken();
+    }
+
+    private double speedupWithoutHazards() {
+        return (double) STAGES * instructionsExecuted() / (STAGES + instructionsExecuted() - 1);
+    }
+
     private void updateSpeedupText() {
-        // assume 1 cycle per stage with pipeline, 5 cycles per stage without (i e all stalls)
-
-        int instructionsExecuted = backstepStack.size();
-        int totalCyclesTaken = Math.max(1, model.getRowCount());
-
-        StringBuilder sb = new StringBuilder();
-        sb.append("<html>");
-
-        sb.append("Instructions executed: ");
-        sb.append(instructionsExecuted);
-        sb.append("<br/>");
-
-        sb.append("Speedup: ");
-        sb.append(String.format("%.2f", (double) STAGES * instructionsExecuted / totalCyclesTaken));
-        sb.append("<br/>");
-
-        sb.append("Speedup without hazards: ");
-        sb.append(String.format("%.2f", (double) STAGES * instructionsExecuted / (STAGES + instructionsExecuted - 1)));
-
-        sb.append("</html>");
-
-        speedup.setText(sb.toString());
+        gui.updateSpeedupText(instructionsExecuted(), speedup(), speedupWithoutHazards());
     }
 }
